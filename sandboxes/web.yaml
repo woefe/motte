@@ -1,0 +1,19 @@
+image: "ghcr.io/woefe/motte/web:latest"
+
+network:
+  allow:
+    # gateway DNS, github (git/API/releases), opencode provider
+    - "dns"
+    - "*.github.com"
+    - "*.githubusercontent.com"
+    - "*.opencode.ai"
+    # python: pypi index + file CDN
+    - "pypi.org"
+    - "files.pythonhosted.org"
+    # node: npm registry
+    - "registry.npmjs.org"
+    # arch package mirrors (kept in sync with docker/pacman-mirrorlist)
+    - "fastly.mirror.pkgbuild.com"
+    - "geo.mirror.pkgbuild.com"
+    # llama.cpp server on the host
+    - "host:tcp:9931"

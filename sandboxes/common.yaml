@@ -1,0 +1,32 @@
+---
+# Shared sandbox settings, overlaid by a profile file via repeated --conf.
+# Overlay model + ../ path rule: AGENTS.md; Go-provider secret flow: README.
+# Keep comments here to labels only.
+
+cpus: 4
+memory: "4G"
+workdir: "/workspace"
+shell: "/bin/bash"
+
+# Host repo root as the OpenCode workspace.
+# Mount sources are relative to this file's directory, so ../ is the repo root.
+mounts:
+  - "../:/workspace:rw"
+
+network:
+  tls:
+    enabled: true
+
+secrets:
+  # OpenCode Go token read from the host env at sandbox start
+  OPENCODE_GO_KEY:
+    allow:
+      - "*.opencode.ai"
+    substitution:
+      header_fields: ["authorization", "x-api-key"]
+
+scripts:
+  # Connectivity check: opencode version + llama /health.
+  check: "opencode --version && curl -sf http://host.microsandbox.internal:9931/health && echo 'llama server reachable'"
+
+cmd: ["opencode"]

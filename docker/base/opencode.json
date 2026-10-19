@@ -1,0 +1,57 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "go/glm-5.3",
+  "provider": {
+    "llama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Llama server (host)",
+      "options": {
+        "baseURL": "http://host.microsandbox.internal:9931/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "local": {
+          "name": "Local llama.cpp model"
+        }
+      }
+    },
+    "go": {
+      "name": "OpenCode Go",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/go/v1",
+        "apiKey": "{env:OPENCODE_GO_KEY}"
+      },
+      "models": {
+        "kimi-k3": { "name": "Kimi K3" },
+        "kimi-k2.7-code": { "name": "Kimi K2.7 Code" },
+        "kimi-k2.6": { "name": "Kimi K2.6" },
+        "qwen3.8-max": { "name": "Qwen3.8 Max" },
+        "qwen3.8-flash": { "name": "Qwen3.8 Flash" },
+        "qwen3.7-plus": { "name": "Qwen3.7 Plus" },
+        "qwen3.7-max": { "name": "Qwen3.7 Max" },
+        "grok-4.7": { "name": "Grok 4.7" },
+        "grok-4.6": { "name": "Grok 4.6" },
+        "glm-5.3": { "name": "GLM-5.3" },
+        "glm-5.3-flash": { "name": "GLM-5.3 Flash" },
+        "glm-5.2": { "name": "GLM-5.2" },
+        "deepseek-v4-pro": { "name": "DeepSeek V4 Pro" },
+        "deepseek-v4-flash": { "name": "DeepSeek V4 Flash" },
+        "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash" },
+        "deepseek-v4-flash-vision-exp": { "name": "DeepSeek V4 Flash Vision Exp" },
+        "gpt-6-luna": { "name": "GPT 6 Luna" },
+        "gpt-5.6-luna": { "name": "GPT 5.6 Luna" },
+        "claude-haiku-5-5": { "name": "Claude Haiku 5.5" },
+        "minimax-m3": { "name": "MiniMax M3" },
+        "minimax-m2.7": { "name": "MiniMax M2.7" },
+        "mimo-v2.6-pro": { "name": "MiMo-V2.6-Pro" },
+        "mimo-v2.5-pro": { "name": "MiMo-V2.5-Pro" },
+        "mimo-v2.5": { "name": "MiMo V2.5" },
+        "space-bunny": { "name": "Space Bunny" },
+        "longcat-2.0": { "name": "LongCat 2.0" },
+        "hy4-preview": { "name": "Hy4 preview" },
+        "hy3": { "name": "Hy3" }
+      }
+    }
+  }
+}

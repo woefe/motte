@@ -1,0 +1,19 @@
+image: "ghcr.io/woefe/motte/golang:latest"
+
+network:
+  allow:
+    # gateway DNS, github (git/API/releases), opencode provider, llama host port
+    - "dns"
+    - "*.github.com"
+    - "*.githubusercontent.com"
+    - "*.opencode.ai"
+    # go toolchain + module proxy
+    - "go.dev"
+    - "dl.google.com"
+    - "proxy.golang.org"
+    - "sum.golang.org"
+    # arch package mirrors (kept in sync with docker/pacman-mirrorlist)
+    - "fastly.mirror.pkgbuild.com"
+    - "geo.mirror.pkgbuild.com"
+    # llama.cpp server on the host
+    - "host:tcp:9931"
