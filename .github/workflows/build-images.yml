@@ -46,7 +46,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: docker/base
-          file: Dockerfile
           push: true
           tags: |
             ghcr.io/${{ env.IMAGE_NS }}/base:latest
@@ -84,7 +83,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: docker/${{ matrix.variant }}
-          file: Dockerfile
           push: true
           tags: |
             ghcr.io/${{ env.IMAGE_NS }}/${{ matrix.variant }}:latest
