@@ -2,8 +2,8 @@ FROM archlinux:latest
 
 LABEL org.opencontainers.image.description="Motte sandbox base: opencode + shared tooling"
 
-COPY docker/base/pacman-mirrorlist /etc/pacman.d/mirrorlist
-COPY docker/base/opencode.json /etc/opencode/opencode.json
+COPY pacman-mirrorlist /etc/pacman.d/mirrorlist
+COPY opencode.json /etc/opencode/opencode.json
 
 RUN pacman -Sy --noconfirm --needed \
         ca-certificates \
