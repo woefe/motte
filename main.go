@@ -170,7 +170,8 @@ func creationProgressLine(event m.CreationProgress) string {
 // pullProgressLine renders one image-pull event.
 func pullProgressLine(d m.CreationProgressDetail) string {
 	layer := ""
-	if d.LayerCount != nil && *d.LayerCount > 0 {
+	// Early pull events carry a layer count but no layer index yet.
+	if d.LayerCount != nil && d.LayerIndex != nil && *d.LayerCount > 0 {
 		layer = fmt.Sprintf("layer %d/%d: ", *d.LayerIndex+1, *d.LayerCount)
 	}
 	switch d.Kind {
