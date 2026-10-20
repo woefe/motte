@@ -94,15 +94,46 @@ func TestParseAllowRule(t *testing.T) {
 		{entry: "dns:udp:5353", wantRe: "fixed to port 53"},
 		{entry: "dns:sctp", wantRe: "supports"},
 		{entry: "dns:x:y:z", wantRe: "trailing"},
-		{entry: "*.github.com", want: &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com"}},
-		{entry: "go.dev", want: &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: "go.dev"}},
+		{
+			entry: "*.github.com",
+			want: &m.PolicyRule{
+				Action:      m.PolicyActionAllow,
+				Direction:   m.PolicyDirectionEgress,
+				Destination: ".github.com",
+			},
+		},
+		{
+			entry: "go.dev",
+			want: &m.PolicyRule{
+				Action:      m.PolicyActionAllow,
+				Direction:   m.PolicyDirectionEgress,
+				Destination: "go.dev",
+			},
+		},
 		{entry: "host:tcp:9931", want: &m.PolicyRule{
 			Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
 			Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Ports: []string{"9931"},
 		}},
-		{entry: "public", want: &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: "public"}},
-		{entry: "meta", want: &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: "metadata"}},
-		{entry: "any", want: &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: "*"}},
+		{
+			entry: "public",
+			want: &m.PolicyRule{
+				Action:      m.PolicyActionAllow,
+				Direction:   m.PolicyDirectionEgress,
+				Destination: "public",
+			},
+		},
+		{
+			entry: "meta",
+			want: &m.PolicyRule{
+				Action:      m.PolicyActionAllow,
+				Direction:   m.PolicyDirectionEgress,
+				Destination: "metadata",
+			},
+		},
+		{
+			entry: "any",
+			want:  &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: "*"},
+		},
 		{entry: "10.0.0.0/8", want: allowEgress("10.0.0.0/8")},
 		{entry: "1.1.1.1", want: allowEgress("1.1.1.1")},
 		{entry: "[2001:db8::1]", want: allowEgress("2001:db8::1")},

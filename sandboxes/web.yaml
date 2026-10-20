@@ -1,3 +1,4 @@
+---
 image: "ghcr.io/woefe/motte/web:latest"
 
 network:

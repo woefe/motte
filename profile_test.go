@@ -300,7 +300,13 @@ func TestParseMountSpec(t *testing.T) {
 	}{
 		{spec: "../:/workspace:rw", hostPath: "/repo", guestPath: "/workspace", readonly: false},
 		{spec: "../:/workspace", hostPath: "/repo", guestPath: "/workspace"},
-		{spec: "sub:/data:ro,noexec", hostPath: "/repo/sandboxes/sub", guestPath: "/data", readonly: true, noexec: true},
+		{
+			spec:      "sub:/data:ro,noexec",
+			hostPath:  "/repo/sandboxes/sub",
+			guestPath: "/data",
+			readonly:  true,
+			noexec:    true,
+		},
 		{spec: "/abs:/data:nosuid", hostPath: "/abs", guestPath: "/data"},
 		{spec: "./:/w:ro,rw", wantErr: true, errComment: "conflicting"},
 		{spec: "./:/w:quota=1024", wantErr: true, errComment: "unsupported option"},

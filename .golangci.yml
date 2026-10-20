@@ -1,0 +1,21 @@
+---
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - misspell
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    golines:
+      max-len: 120
+      tab-len: 4

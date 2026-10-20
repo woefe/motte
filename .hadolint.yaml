@@ -1,0 +1,5 @@
+---
+# hadolint config for this repo.
+# The base image intentionally tracks archlinux:latest (rolling weekly rebuilds).
+ignored:
+  - DL3007

@@ -3,7 +3,7 @@ name: build-images
 
 on:
   schedule:
-    # Mondays 04:00 UTC — weekly rolling rebuild (fresh archlinux base + packages).
+    # Mondays 04:00 UTC — weekly rolling rebuild (fresh archlinux base + packages)
     - cron: "0 4 * * 1"
   workflow_dispatch:
   push:

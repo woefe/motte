@@ -27,6 +27,9 @@ secrets:
 
 scripts:
   # Connectivity check: opencode version + llama /health.
-  check: "opencode --version && curl -sf http://host.microsandbox.internal:9931/health && echo 'llama server reachable'"
+  check: >-
+    opencode --version &&
+    curl -sf http://host.microsandbox.internal:9931/health &&
+    echo 'llama server reachable'
 
 cmd: ["opencode"]

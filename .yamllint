@@ -1,0 +1,11 @@
+---
+# yamllint config for this repo.
+extends: default
+
+rules:
+  # Long lines are common in GitHub Actions expressions and image refs.
+  line-length:
+    max: 120
+  # The `on:` trigger key is a GitHub Actions YAML quirk, not a truthy value.
+  truthy:
+    check-keys: false

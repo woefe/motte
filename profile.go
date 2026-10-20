@@ -351,7 +351,11 @@ func parseMountSpec(spec, configDir string) (mountSpec, error) {
 		case "ro", "rw", "noexec", "nosuid", "nodev":
 			seen[option] = true
 		default:
-			return mount, fmt.Errorf("mount %q: unsupported option %q (supported: ro, rw, noexec, nosuid, nodev)", spec, option)
+			return mount, fmt.Errorf(
+				"mount %q: unsupported option %q (supported: ro, rw, noexec, nosuid, nodev)",
+				spec,
+				option,
+			)
 		}
 	}
 	if seen["ro"] && seen["rw"] {

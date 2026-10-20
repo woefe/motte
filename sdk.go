@@ -163,7 +163,13 @@ func parseAllowRule(entry string) (m.PolicyRule, error) {
 		}
 	}
 	if looksLikePort(proto) {
-		return rule, fmt.Errorf("network rule %q: %q is a port, not a protocol; did you mean %s:tcp:%s?", entry, proto, target, proto)
+		return rule, fmt.Errorf(
+			"network rule %q: %q is a port, not a protocol; did you mean %s:tcp:%s?",
+			entry,
+			proto,
+			target,
+			proto,
+		)
 	}
 	destination, err := parseRuleTarget(target)
 	if err != nil {
@@ -197,13 +203,20 @@ func parseDNSRule(entry string) (m.PolicyRule, error) {
 		case "tcp":
 			rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolTCP}
 		default:
-			return rule, fmt.Errorf("network rule %q: the `dns` target supports `tcp`, `udp`, or `any`, not %q", entry, fields[1])
+			return rule, fmt.Errorf(
+				"network rule %q: the `dns` target supports `tcp`, `udp`, or `any`, not %q",
+				entry,
+				fields[1],
+			)
 		}
 		if len(fields) == 3 {
 			switch fields[2] {
 			case "", "any", "53":
 			default:
-				return rule, fmt.Errorf("network rule %q: the `dns` target is fixed to port 53; omit the port or use `53`/`any`", entry)
+				return rule, fmt.Errorf(
+					"network rule %q: the `dns` target is fixed to port 53; omit the port or use `53`/`any`",
+					entry,
+				)
 			}
 		}
 	case 1:
@@ -284,7 +297,10 @@ func parseRuleProtocols(proto string, present bool) ([]m.PolicyProtocol, error) 
 	case "icmpv6":
 		return []m.PolicyProtocol{m.PolicyProtocolICMPv6}, nil
 	default:
-		return nil, fmt.Errorf("%q is not a recognized protocol; expected `any`, `tcp`, `udp`, `icmpv4`, or `icmpv6`", proto)
+		return nil, fmt.Errorf(
+			"%q is not a recognized protocol; expected `any`, `tcp`, `udp`, `icmpv4`, or `icmpv6`",
+			proto,
+		)
 	}
 }
 
@@ -338,7 +354,10 @@ func parseableU16(s string) bool {
 }
 
 func trailingJunkError(entry string) error {
-	return fmt.Errorf("network rule %q has trailing fields after the ports; if this is an IPv6 address, wrap it as [<addr>]", entry)
+	return fmt.Errorf(
+		"network rule %q has trailing fields after the ports; if this is an IPv6 address, wrap it as [<addr>]",
+		entry,
+	)
 }
 
 // parseSizeMiB parses a CLI size string into MiB: bare numbers are MiB, M is

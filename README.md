@@ -57,9 +57,11 @@ The API key is injected with a **microsandbox secret** — it never enters the V
 
 1. Create the key at https://opencode.ai/console
 2. Export it in the host environment before launching:
+
    ```sh
    export OPENCODE_GO_KEY="sk_..."   # the launcher refuses to start without it
    ```
+
 3. launch the sandbox with `go run . <profile>`
 
 The alternative is the interactive `/connect` flow inside the TUI (credential stored in the sandbox's own root disk); the secret is preferred here because it keeps the key on the host.

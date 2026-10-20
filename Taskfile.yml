@@ -1,0 +1,33 @@
+---
+version: "3"
+
+# Buffer each command's output and print it as one block when it finishes, so
+# parallel tasks do not interleave their lines. Trade-off: no live feedback
+# while a long command (e.g. go test) is running.
+output: group
+
+tasks:
+  # All checks run in parallel; failfast stops the rest once one fails.
+  lint:
+    desc: Run all linters and Go checks in parallel
+    deps: [editorconfig, yamllint, hadolint, go]
+    failfast: true
+
+  editorconfig:
+    cmds:
+      - editorconfig-checker
+
+  yamllint:
+    cmds:
+      - yamllint sandboxes/*.yaml .github/workflows/*.yml Taskfile.yml
+
+  hadolint:
+    cmds:
+      - hadolint docker/*/Dockerfile
+
+  go:
+    cmds:
+      # golangci-lint covers vet-style linters + formatting (see .golangci.yml).
+      - golangci-lint run ./...
+      - go test ./...
+      - go build -o /dev/null .
