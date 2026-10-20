@@ -24,34 +24,31 @@ jobs:
   base:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # GHCR requires lowercase image refs.
-      - name: Lowercase the image namespace
-        run: |
-          echo "IMAGE_NS=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}/base
+          tags: |
+            type=raw,value=latest
+            type=raw,value={{date 'YYYY-MM-DD'}}
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute the build-date tag
-        run: |
-          echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
-
       - name: Build and push the base image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/base
           push: true
-          tags: |
-            ghcr.io/${{ env.IMAGE_NS }}/base:latest
-            ghcr.io/${{ env.IMAGE_NS }}/base:${{ env.BUILD_DATE }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   variants:
     needs: base
@@ -61,33 +58,30 @@ jobs:
       matrix:
         variant: [golang, web]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Lowercase the image namespace
-        run: |
-          echo "IMAGE_NS=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-
-      # Variants FROM the freshly-pushed base, so GHCR login must come first.
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute the build-date tag
-        run: |
-          echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.variant }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value={{date 'YYYY-MM-DD'}}
 
       - name: Build and push the ${{ matrix.variant }} image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/${{ matrix.variant }}
           push: true
-          tags: |
-            ghcr.io/${{ env.IMAGE_NS }}/${{ matrix.variant }}:latest
-            ghcr.io/${{ env.IMAGE_NS }}/${{ matrix.variant }}:${{ env.BUILD_DATE }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BASE_IMAGE=ghcr.io/${{ env.IMAGE_NS }}/base:latest
+            BASE_IMAGE=ghcr.io/${{ github.repository }}/base:latest
