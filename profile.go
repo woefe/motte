@@ -115,11 +115,17 @@ type secretSpec struct {
 
 // loadProfile loads sandboxes/common.yaml overlaid with
 // sandboxes/<name>.yaml and resolves the merged configuration.
+// Relative mount sources resolve against the directory motte was started in,
+// so the workspace tracks where the user launched the launcher.
 // getenv supplies secret values; a secret without a value fails.
 func loadProfile(dir, name string, getenv func(string) string) (*profile, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolving the working directory: %w", err)
+	}
 	merged := &mergedDoc{}
 	for _, file := range []string{"common.yaml", name + ".yaml"} {
-		doc, mounts, err := decodeProfileFile(filepath.Join(dir, file))
+		doc, mounts, err := decodeProfileFile(filepath.Join(dir, file), cwd)
 		if err != nil {
 			return nil, err
 		}
@@ -129,8 +135,8 @@ func loadProfile(dir, name string, getenv func(string) string) (*profile, error)
 }
 
 // decodeProfileFile strictly decodes one profile file and resolves its mount
-// sources against the directory containing the file, like the CLI.
-func decodeProfileFile(path string) (*profileDoc, []mountSpec, error) {
+// sources against cwd, the directory motte was started in.
+func decodeProfileFile(path, cwd string) (*profileDoc, []mountSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading profile file: %w", err)
@@ -147,7 +153,7 @@ func decodeProfileFile(path string) (*profileDoc, []mountSpec, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, nil, fmt.Errorf("invalid profile file %s: multiple YAML documents", path)
 	}
-	mounts, err := parseMounts(doc.Mounts, filepath.Dir(path))
+	mounts, err := parseMounts(doc.Mounts, cwd)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -299,14 +305,14 @@ func newProfile(name string, d *mergedDoc, getenv func(string) string) (*profile
 }
 
 // parseMounts parses the string mounts of one file, resolving relative host
-// sources against configDir, the directory of the file declaring them.
-func parseMounts(mounts *[]string, configDir string) ([]mountSpec, error) {
+// sources against cwd, the directory motte was started in.
+func parseMounts(mounts *[]string, cwd string) ([]mountSpec, error) {
 	if mounts == nil {
 		return nil, nil
 	}
 	out := make([]mountSpec, 0, len(*mounts))
 	for _, spec := range *mounts {
-		mount, err := parseMountSpec(spec, configDir)
+		mount, err := parseMountSpec(spec, cwd)
 		if err != nil {
 			return nil, err
 		}
@@ -318,8 +324,8 @@ func parseMounts(mounts *[]string, configDir string) ([]mountSpec, error) {
 // parseMountSpec parses one string mount, SOURCE:TARGET[:OPTIONS], following
 // the CLI grammar: the first colon separates the source, the second starts the
 // option list (ro, rw, noexec, nosuid, nodev).
-// A relative source resolves against configDir.
-func parseMountSpec(spec, configDir string) (mountSpec, error) {
+// A relative source resolves against cwd, the directory motte was started in.
+func parseMountSpec(spec, cwd string) (mountSpec, error) {
 	var mount mountSpec
 	sep := strings.IndexByte(spec, ':')
 	if sep < 0 {
@@ -337,7 +343,7 @@ func parseMountSpec(spec, configDir string) (mountSpec, error) {
 		return mount, fmt.Errorf("mount %q: target %q must be an absolute guest path", spec, guest)
 	}
 	if !filepath.IsAbs(source) {
-		source = filepath.Join(configDir, source)
+		source = filepath.Join(cwd, source)
 	}
 	mount.hostPath = source
 	mount.guestPath = guest

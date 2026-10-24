@@ -8,10 +8,9 @@ memory: "4G"
 workdir: "/workspace"
 shell: "/bin/bash"
 
-# Host repo root as the OpenCode workspace.
-# Mount sources are relative to this file's directory, so ../ is the repo root.
+# OpenCode workspace: the directory motte was started in (sources are cwd-relative).
 mounts:
-  - "../:/workspace:rw"
+  - "./:/workspace:rw"
 
 network:
   tls:

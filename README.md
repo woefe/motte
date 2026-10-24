@@ -16,7 +16,7 @@ go run . golang   # golang profile
 go run . web      # web profile
 ```
 
-This pulls the CI-built image, starts a microsandbox microVM, and launches the OpenCode TUI with the repository root mounted read-write at `/workspace`.
+This pulls the CI-built image, starts a microsandbox microVM, and launches the OpenCode TUI with the directory you launched motte from mounted read-write at `/workspace`.
 Add `--no-pull` to skip the registry pull so a locally loaded image can win.
 The profiles live in `sandboxes/common.yaml` plus `sandboxes/<name>.yaml`; both follow the [microsandbox CLI config](https://docs.microsandbox.dev/cli/configuration) schema, and the launcher rejects fields it cannot translate.
 

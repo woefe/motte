@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -275,8 +274,8 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	if !ok {
 		t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
 	}
-	if mount.Kind() != m.MountKindBind || mount.Bind != filepath.Dir(filepath.Clean(dir)) {
-		t.Errorf("mount = %+v (bind %q), want a bind of the fixture parent", mount, mount.Bind)
+	if mount.Kind() != m.MountKindBind || mount.Bind != workingDir(t) {
+		t.Errorf("mount = %+v (bind %q), want a bind of the working directory", mount, mount.Bind)
 	}
 	if mount.Readonly {
 		t.Error("mount is readonly, want rw")

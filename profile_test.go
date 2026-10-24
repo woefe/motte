@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+// workingDir returns the test process's working directory: the base the
+// launcher resolves relative mount sources against.
+func workingDir(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	return wd
+}
+
 // writeProfileFile writes one sandboxes/*.yaml fixture into dir.
 func writeProfileFile(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -37,7 +48,7 @@ memory: "4G"
 workdir: "/workspace"
 shell: "/bin/bash"
 mounts:
-  - "../:/workspace:rw"
+  - "./:/workspace:rw"
 network:
   tls:
     enabled: true
@@ -92,7 +103,7 @@ func TestLoadProfileMergesAndResolves(t *testing.T) {
 	if got, ok := profile.scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
 		t.Errorf("scripts.check = %q", got)
 	}
-	// The mount source resolves config-relative: ../ from sandboxes/ = repo dir.
+	// The mount source resolves cwd-relative: ./ is the directory motte started in.
 	if len(profile.mounts) != 1 {
 		t.Fatalf("mounts = %+v, want 1", profile.mounts)
 	}
@@ -100,7 +111,7 @@ func TestLoadProfileMergesAndResolves(t *testing.T) {
 	if mount.guestPath != "/workspace" {
 		t.Errorf("guestPath = %q", mount.guestPath)
 	}
-	if want := filepath.Dir(filepath.Clean(dir)); mount.hostPath != want {
+	if want := workingDir(t); mount.hostPath != want {
 		t.Errorf("hostPath = %q, want %q", mount.hostPath, want)
 	}
 	if mount.readonly {
@@ -185,9 +196,9 @@ secrets:
 	if profile.memoryMiB == nil || *profile.memoryMiB != 8192 {
 		t.Errorf("memoryMiB = %v, want 8192", profile.memoryMiB)
 	}
-	// Vec fields replace wholesale; the mount is re-resolved config-relative.
+	// Vec fields replace wholesale; the mount is re-resolved cwd-relative.
 	if len(profile.mounts) != 1 || profile.mounts[0].guestPath != "/data" ||
-		profile.mounts[0].readonly || profile.mounts[0].hostPath != filepath.Join(dir, "second") {
+		profile.mounts[0].readonly || profile.mounts[0].hostPath != filepath.Join(workingDir(t), "second") {
 		t.Errorf("mounts = %+v", profile.mounts)
 	}
 	// Map fields merge per key.
@@ -350,8 +361,8 @@ func TestRealProfilesLoad(t *testing.T) {
 			if len(profile.mounts) != 1 || profile.mounts[0].guestPath != "/workspace" {
 				t.Fatalf("mounts = %+v", profile.mounts)
 			}
-			if want := filepath.Clean(sourceDir()); profile.mounts[0].hostPath != want {
-				t.Errorf("hostPath = %q, want the repo root %q", profile.mounts[0].hostPath, want)
+			if want := workingDir(t); profile.mounts[0].hostPath != want {
+				t.Errorf("hostPath = %q, want the working directory %q", profile.mounts[0].hostPath, want)
 			}
 			if len(profile.secrets) != 1 {
 				t.Errorf("secrets = %+v, want OPENCODE_GO_KEY", profile.secrets)
