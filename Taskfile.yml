@@ -31,3 +31,38 @@ tasks:
       - golangci-lint run ./...
       - go test ./...
       - go build -o /dev/null .
+
+  # Local builds for trying image changes without pushing: the images are
+  # tagged with the same ghcr.io refs the profiles reference, so a subsequent
+  # `go run . <profile> --no-pull` boots them. name=golang or name=web builds
+  # the base plus that one variant.
+  build-images:
+    desc: Build images locally and load them into the msb cache (name=golang|web builds one variant)
+    vars:
+      PROFILES: '{{if .name}}{{.name}}{{else}}golang web{{end}}'
+    cmds:
+      - task: image-base
+      - for:
+          var: PROFILES
+        task: image-variant
+        vars:
+          VARIANT: "{{.ITEM}}"
+
+  # --pull refreshes the rolling archlinux:latest like CI's clean builder.
+  image-base:
+    internal: true
+    vars:
+      REF: ghcr.io/woefe/motte/base:latest
+    cmds:
+      - podman build --pull -t {{.REF}} docker/base
+      - podman save {{.REF}} | msb load
+
+  # No --pull here: the variant must build from the base task above, not the
+  # registry's, or a locally changed base would be ignored.
+  image-variant:
+    internal: true
+    vars:
+      REF: ghcr.io/woefe/motte/{{.VARIANT}}:latest
+    cmds:
+      - podman build -t {{.REF}} docker/{{.VARIANT}}
+      - podman save {{.REF}} | msb load

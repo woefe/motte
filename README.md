@@ -7,7 +7,8 @@ Environments are isolated using [microsandbox](https://docs.microsandbox.dev) mi
 
 [Go](https://go.dev) 1.22 or newer to run the launcher.
 The launcher reuses an already-installed microsandbox runtime and otherwise downloads its pinned `msb`/`libkrunfw` pair to `~/.microsandbox` on first start.
-The microsandbox CLI (`msb`) itself is only needed for the one-offs below.
+The microsandbox CLI (`msb`) itself is only needed for the one-offs below and for `task build-images`.
+Building images locally also needs `podman` and [Task](https://taskfile.dev).
 
 ## Usage
 
@@ -41,6 +42,10 @@ CI rebuilds all images every Monday 04:00 UTC and on pushes touching `docker/**`
 Tags: `ghcr.io/woefe/motte/{base,golang,web}:{latest,YYYY-MM-DD}` — pin a specific weekly build via the date tag; `latest` is the rolling tag.
 
 **adopting a new weekly image**: images rebuild on schedule; run `go run . <profile> --replace` to re-pull `:latest` and recreate the VM.
+
+**building locally**: `task build-images` builds all images and loads them into the msb cache under the same `latest` refs the profiles reference; `task build-images name=golang` builds the base plus one variant.
+Boot the local image with `go run . <profile> --no-pull --replace`.
+The local image shadows `latest` in the msb cache only until the next plain `go run . <profile>` re-pulls GHCR, which restores the CI image.
 
 ## Default OpenCode inference providers
 The default opencode config sets up a llama.cpp and OpenCode Go inference providers
