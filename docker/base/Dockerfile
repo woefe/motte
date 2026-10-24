@@ -13,8 +13,11 @@ RUN pacman -Sy --noconfirm --needed \
         fd \
         git \
         mise \
+        # uv required for mise pypi backend
+        uv \
         opencode \
         podman \
         podman-docker \
         ripgrep \
+        base-devel \
     && rm -rf /var/cache/pacman/pkg/*
