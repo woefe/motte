@@ -260,8 +260,9 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
 		t.Errorf("Cmd = %v", config.Cmd)
 	}
-	if !config.Replace {
-		t.Error("Replace = false, want true")
+	// Replace is the launcher's call (--replace), not part of the profile.
+	if config.Replace {
+		t.Error("Replace should be left unset by sandboxOptions")
 	}
 	if config.PullPolicy != m.PullPolicyAlways {
 		t.Errorf("PullPolicy = %q, want always", config.PullPolicy)

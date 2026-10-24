@@ -2,14 +2,17 @@
 //
 // Usage:
 //
-//	go run . <golang|web> [--no-pull]
+//	go run . <golang|web> [--no-pull] [--replace]
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
-// Behaviour, prerequisites, and one-offs: see the README.
+// The VM is named after the directory you launch from and is reused across
+// runs; --replace recreates it instead. Behaviour and one-offs: see the README.
 package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +28,7 @@ func main() {
 
 // run launches the profile sandbox and returns the workload's exit code.
 func run(args []string) int {
-	profileName, noPull, err := parseArgs(args)
+	profileName, noPull, replace, err := parseArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
@@ -56,16 +59,17 @@ func run(args []string) int {
 		return 1
 	}
 
-	name := "motte-" + profileName
-	progress, results := m.CreateSandboxWithProgress(ctx, name, opts...)
-	displayDone := displayCreationProgress(progress)
-	result := <-results
-	<-displayDone
-	if result.Err != nil {
-		fmt.Fprintf(os.Stderr, "motte: creating sandbox %s: %v\n", name, result.Err)
+	name, err := sandboxName(profileName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
 		return 1
 	}
-	sandbox := result.Sandbox
+	sandbox, err := openSandbox(ctx, name, opts, replace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "motte: sandbox %s\n", name)
 
 	// Bridge this terminal to the profile's cmd workload (the old
 	// `msb run -t`); blocks until the workload exits.
@@ -86,9 +90,9 @@ func run(args []string) int {
 	return code
 }
 
-// parseArgs takes a profile name and/or --no-pull in any order.
+// parseArgs takes a profile name and/or --no-pull and --replace in any order.
 // It fails when no profile is given and on anything else.
-func parseArgs(args []string) (profile string, noPull bool, err error) {
+func parseArgs(args []string) (profile string, noPull, replace bool, err error) {
 	set := false
 	for _, arg := range args {
 		switch arg {
@@ -97,14 +101,18 @@ func parseArgs(args []string) (profile string, noPull bool, err error) {
 			set = true
 		case "--no-pull":
 			noPull = true
+		case "--replace":
+			replace = true
 		default:
-			return "", false, fmt.Errorf("unknown argument: %s (expected golang|web or --no-pull)", arg)
+			return "", false, false, fmt.Errorf(
+				"unknown argument: %s (expected golang|web, --no-pull, or --replace)", arg,
+			)
 		}
 	}
 	if !set {
-		return "", false, fmt.Errorf("no profile given (expected golang|web)")
+		return "", false, false, fmt.Errorf("no profile given (expected golang|web)")
 	}
-	return profile, noPull, nil
+	return profile, noPull, replace, nil
 }
 
 // sourceDir returns the directory of this source file: the repo root, like the
@@ -117,6 +125,70 @@ func sourceDir() string {
 		return "."
 	}
 	return filepath.Dir(file)
+}
+
+// dirHash returns a short hash of the resolved current working directory, so
+// every directory maps to one stable, unique sandbox-name fragment.
+// Symlinks are resolved first so linked or renamed paths share a sandbox.
+func dirHash() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolving the working directory: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolving symlinks in %s: %w", cwd, err)
+	}
+	sum := sha256.Sum256([]byte(resolved))
+	return hex.EncodeToString(sum[:6]), nil
+}
+
+// sandboxName returns the msb VM name for a profile in this directory: the
+// directory hash is prefixed to the profile name, so the VM persists per
+// directory instead of being recreated on every run.
+func sandboxName(profileName string) (string, error) {
+	hash, err := dirHash()
+	if err != nil {
+		return "", err
+	}
+	return hash + "-motte-" + profileName, nil
+}
+
+// openSandbox returns a live sandbox for name. With replace set it recreates
+// the VM; otherwise it reuses this directory's persisted VM when one exists and
+// creates it (streaming pull/boot progress) only when none does yet.
+func openSandbox(ctx context.Context, name string, opts []m.SandboxOption, replace bool) (*m.Sandbox, error) {
+	if replace {
+		return createSandbox(ctx, name, append(append([]m.SandboxOption{}, opts...), m.WithReplace()))
+	}
+	handle, err := m.GetSandbox(ctx, name)
+	if err == nil {
+		return handle.ConnectOrStart(ctx)
+	}
+	if !m.IsKind(err, m.ErrSandboxNotFound) {
+		return nil, fmt.Errorf("looking up sandbox %s: %w", name, err)
+	}
+	sandbox, createErr := createSandbox(ctx, name, opts)
+	if createErr == nil {
+		return sandbox, nil
+	}
+	if m.IsKind(createErr, m.ErrSandboxAlreadyExists) {
+		// A concurrent launch created it first; converge on that VM.
+		return m.ConnectOrCreateSandbox(ctx, name, opts...)
+	}
+	return nil, createErr
+}
+
+// createSandbox boots a new sandbox, streaming creation progress to stderr.
+func createSandbox(ctx context.Context, name string, opts []m.SandboxOption) (*m.Sandbox, error) {
+	progress, results := m.CreateSandboxWithProgress(ctx, name, opts...)
+	displayDone := displayCreationProgress(progress)
+	result := <-results
+	<-displayDone
+	if result.Err != nil {
+		return nil, fmt.Errorf("creating sandbox %s: %w", name, result.Err)
+	}
+	return result.Sandbox, nil
 }
 
 // displayCreationProgress renders sandbox-creation progress (image pull, VM

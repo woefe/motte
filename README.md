@@ -17,20 +17,22 @@ go run . web      # web profile
 ```
 
 This pulls the CI-built image, starts a microsandbox microVM, and launches the OpenCode TUI with the directory you launched motte from mounted read-write at `/workspace`.
+Each directory has its own VM, named after a hash of that directory; the launcher prints the name it uses.
+A directory's VM is reused across runs, so sessions and config on its root disk are kept; pass `--replace` to recreate the VM from scratch.
 Add `--no-pull` to skip the registry pull so a locally loaded image can win.
 The profiles live in `sandboxes/common.yaml` plus `sandboxes/<name>.yaml`; both follow the [microsandbox CLI config](https://docs.microsandbox.dev/cli/configuration) schema, and the launcher rejects fields it cannot translate.
 
-Useful one-offs:
+Useful one-offs (substitute the VM name the launcher printed):
 
 ```sh
 # Verify the sandbox can reach everything it should (agent + llama /health)
-msb exec motte-golang -- check
+msb exec <vm-name> -- check
 
 # Continue a previous session
-msb exec -t motte-golang -- opencode
+msb exec -t <vm-name> -- opencode
 
 # Clean up
-msb rm -f motte-golang
+msb rm -f <vm-name>
 ```
 
 ## Images
@@ -38,7 +40,7 @@ msb rm -f motte-golang
 CI rebuilds all images every Monday 04:00 UTC and on pushes touching `docker/**`.
 Tags: `ghcr.io/woefe/motte/{base,golang,web}:{latest,YYYY-MM-DD}` — pin a specific weekly build via the date tag; `latest` is the rolling tag.
 
-**adopting a new weekly image**: images rebuild on schedule; `go run . <profile>` re-pulls `:latest` and recreates the sandbox - sessions/config live on the sandbox's own root disk and are kept across stop/start.
+**adopting a new weekly image**: images rebuild on schedule; run `go run . <profile> --replace` to re-pull `:latest` and recreate the VM.
 
 ## Default OpenCode inference providers
 The default opencode config sets up a llama.cpp and OpenCode Go inference providers

@@ -18,14 +18,14 @@ import (
 )
 
 // sandboxOptions translates a profile into the options for creating the
-// motte-<profile> sandbox.
+// profile's sandbox. Replacing an existing VM is the launcher's call (see
+// --replace), so no replace option is set here.
 // With noPull set it leaves the image pull policy at the runtime default (pull
 // only if missing) so a locally loaded image wins; otherwise it mirrors the
 // old `msb pull` by always refreshing the image.
 func sandboxOptions(p *profile, noPull bool) ([]m.SandboxOption, error) {
 	opts := []m.SandboxOption{
 		m.WithImage(p.image),
-		m.WithReplace(), // replace any existing motte-<profile> sandbox
 	}
 	if p.cpus != nil {
 		opts = append(opts, m.WithCPUs(*p.cpus))
