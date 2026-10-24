@@ -5,6 +5,8 @@ LABEL org.opencontainers.image.description="Motte sandbox base: opencode + share
 COPY pacman-mirrorlist /etc/pacman.d/mirrorlist
 COPY opencode.json /etc/opencode/opencode.json
 
+ENV COLORTERM=truecolor
+
 RUN pacman -Sy --noconfirm --needed \
         ca-certificates \
         curl \
