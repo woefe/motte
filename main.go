@@ -76,7 +76,7 @@ func run(args []string) int {
 	code, attachErr := sandbox.AttachDefault(ctx)
 
 	// Stop always runs, even on attach errors; the named sandbox and its
-	// root disk persist for the README's one-offs, as with the old run.sh.
+	// root disk persist for the README's one-offs.
 	if err := sandbox.Stop(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "motte: failed to stop sandbox: %v\n", err)
 	}
@@ -115,8 +115,7 @@ func parseArgs(args []string) (profile string, noPull, replace bool, err error) 
 	return profile, noPull, replace, nil
 }
 
-// sourceDir returns the directory of this source file: the repo root, like the
-// old run.sh's `cd "$(dirname "$0")"`.
+// sourceDir returns the directory of this source file: the repo root.
 // It keeps the sandboxes/ configs next to the launcher regardless of the
 // working directory it is started from.
 func sourceDir() string {
