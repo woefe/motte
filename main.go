@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	go run . [golang|web] [--no-pull]
+//	go run . <golang|web> [--no-pull]
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
 // Behaviour, prerequisites, and one-offs: see the README.
@@ -18,10 +18,6 @@ import (
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
 )
-
-// defaultProfile is the profile launched without an argument, as in the old
-// run.sh.
-const defaultProfile = "golang"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -90,19 +86,23 @@ func run(args []string) int {
 	return code
 }
 
-// parseArgs mirrors the old run.sh grammar: a profile name and/or --no-pull,
-// in any order, anything else an error.
+// parseArgs takes a profile name and/or --no-pull in any order.
+// It fails when no profile is given and on anything else.
 func parseArgs(args []string) (profile string, noPull bool, err error) {
-	profile = defaultProfile
+	set := false
 	for _, arg := range args {
 		switch arg {
 		case "golang", "web":
 			profile = arg
+			set = true
 		case "--no-pull":
 			noPull = true
 		default:
 			return "", false, fmt.Errorf("unknown argument: %s (expected golang|web or --no-pull)", arg)
 		}
+	}
+	if !set {
+		return "", false, fmt.Errorf("no profile given (expected golang|web)")
 	}
 	return profile, noPull, nil
 }
