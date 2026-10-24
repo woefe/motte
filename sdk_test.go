@@ -220,87 +220,93 @@ func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
 }
 
 func TestSandboxOptionsTranslateProfile(t *testing.T) {
-	profile, err := loadProfile("golang", fixtureEnv)
-	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
-	}
-	opts, err := sandboxOptions(profile, false)
-	if err != nil {
-		t.Fatalf("sandboxOptions: %v", err)
-	}
-	config := applyOptions(opts)
+	for name, image := range builtinImages() {
+		t.Run(name, func(t *testing.T) {
+			isolatedConfigDir(t)
+			profile, err := loadProfile(name, fixtureEnv)
+			if err != nil {
+				t.Fatalf("loadProfile: %v", err)
+			}
+			opts, err := sandboxOptions(profile, false)
+			if err != nil {
+				t.Fatalf("sandboxOptions: %v", err)
+			}
+			config := applyOptions(opts)
 
-	if config.Image != "ghcr.io/woefe/motte/golang:latest" {
-		t.Errorf("Image = %q", config.Image)
-	}
-	if config.CPUs != 4 || config.MemoryMiB != 4096 {
-		t.Errorf("CPUs/Memory = %d/%d", config.CPUs, config.MemoryMiB)
-	}
-	if config.Workdir != "/workspace" || config.Shell != "/bin/bash" {
-		t.Errorf("Workdir/Shell = %q/%q", config.Workdir, config.Shell)
-	}
-	if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
-		t.Errorf("Cmd = %v", config.Cmd)
-	}
-	// Replace is the launcher's call (--replace), not part of the profile.
-	if config.Replace {
-		t.Error("Replace should be left unset by sandboxOptions")
-	}
-	if config.PullPolicy != m.PullPolicyAlways {
-		t.Errorf("PullPolicy = %q, want always", config.PullPolicy)
-	}
-	if got, ok := config.Scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
-		t.Errorf("Scripts.check = %q", got)
-	}
+			if config.Image != image {
+				t.Errorf("Image = %q, want %q", config.Image, image)
+			}
+			if config.CPUs != 4 || config.MemoryMiB != 4096 {
+				t.Errorf("CPUs/Memory = %d/%d", config.CPUs, config.MemoryMiB)
+			}
+			if config.Workdir != "/workspace" || config.Shell != "/bin/bash" {
+				t.Errorf("Workdir/Shell = %q/%q", config.Workdir, config.Shell)
+			}
+			if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
+				t.Errorf("Cmd = %v", config.Cmd)
+			}
+			// Replace is the launcher's call (--replace), not part of the profile.
+			if config.Replace {
+				t.Error("Replace should be left unset by sandboxOptions")
+			}
+			if config.PullPolicy != m.PullPolicyAlways {
+				t.Errorf("PullPolicy = %q, want always", config.PullPolicy)
+			}
+			if got, ok := config.Scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
+				t.Errorf("Scripts.check = %q", got)
+			}
 
-	mount, ok := config.Volumes["/workspace"]
-	if !ok {
-		t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
-	}
-	if mount.Kind() != m.MountKindBind || mount.Bind != workingDir(t) {
-		t.Errorf("mount = %+v (bind %q), want a bind of the working directory", mount, mount.Bind)
-	}
-	if mount.Readonly {
-		t.Error("mount is readonly, want rw")
-	}
+			mount, ok := config.Volumes["/workspace"]
+			if !ok {
+				t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
+			}
+			if mount.Kind() != m.MountKindBind || mount.Bind != workingDir(t) {
+				t.Errorf("mount = %+v (bind %q), want a bind of the working directory", mount, mount.Bind)
+			}
+			if mount.Readonly {
+				t.Error("mount is readonly, want rw")
+			}
 
-	if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
-		t.Fatalf("Network = %+v", config.Network)
-	}
-	// One rule per allow entry, in declared order.
-	if len(config.Network.Rules) != len(*profile.network.Allow) {
-		t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*profile.network.Allow))
-	}
-	// Spot-check the rule kinds the profile uses: the semantic dns target, a
-	// domain suffix, and a host port.
-	assertFindRule(t, config.Network.Rules, dnsRule, "53")
-	assertFindRule(t, config.Network.Rules, m.PolicyRule{
-		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
-	}, "")
-	assertFindRule(t, config.Network.Rules, m.PolicyRule{
-		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
-		Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Ports: []string{"9931"},
-	}, "9931")
-	if config.Network.TLS == nil {
-		t.Error("Network.TLS not enabled")
-	}
+			if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
+				t.Fatalf("Network = %+v", config.Network)
+			}
+			// One rule per allow entry, in declared order.
+			if len(config.Network.Rules) != len(*profile.network.Allow) {
+				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*profile.network.Allow))
+			}
+			// Spot-check the rule kinds every profile uses: the semantic dns
+			// target, a domain suffix, and a host port.
+			assertFindRule(t, config.Network.Rules, dnsRule, "53")
+			assertFindRule(t, config.Network.Rules, m.PolicyRule{
+				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
+			}, "")
+			assertFindRule(t, config.Network.Rules, m.PolicyRule{
+				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
+				Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Ports: []string{"9931"},
+			}, "9931")
+			if config.Network.TLS == nil {
+				t.Error("Network.TLS not enabled")
+			}
 
-	if len(config.Secrets) != 1 {
-		t.Fatalf("Secrets = %+v, want 1", config.Secrets)
-	}
-	secret := config.Secrets[0]
-	if secret.EnvVar != "OPENCODE_GO_KEY" || secret.Value != "sk_test" {
-		t.Errorf("secret = %q/%q", secret.EnvVar, secret.Value)
-	}
-	if len(secret.Allow) != 1 || secret.Allow[0] != "*.opencode.ai" {
-		t.Errorf("secret.Allow = %v", secret.Allow)
-	}
-	if len(secret.Substitution.HeaderFields) != 2 || secret.Substitution.HeaderFields[0] != "authorization" {
-		t.Errorf("header fields = %v", secret.Substitution.HeaderFields)
+			if len(config.Secrets) != 1 {
+				t.Fatalf("Secrets = %+v, want 1", config.Secrets)
+			}
+			secret := config.Secrets[0]
+			if secret.EnvVar != "OPENCODE_GO_KEY" || secret.Value != "sk_test" {
+				t.Errorf("secret = %q/%q", secret.EnvVar, secret.Value)
+			}
+			if len(secret.Allow) != 1 || secret.Allow[0] != "*.opencode.ai" {
+				t.Errorf("secret.Allow = %v", secret.Allow)
+			}
+			if len(secret.Substitution.HeaderFields) != 2 || secret.Substitution.HeaderFields[0] != "authorization" {
+				t.Errorf("header fields = %v", secret.Substitution.HeaderFields)
+			}
+		})
 	}
 }
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
+	isolatedConfigDir(t)
 	profile, err := loadProfile("golang", fixtureEnv)
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)

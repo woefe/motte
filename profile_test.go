@@ -26,14 +26,27 @@ func fixtureEnv(envVar string) string {
 	return ""
 }
 
+// isolatedConfigDir points XDG_CONFIG_HOME at a fresh temp dir so tests never
+// read a real ~/.config/motte.
+func isolatedConfigDir(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
+// builtinImages returns the image reference of every built-in profile.
+func builtinImages() map[string]string {
+	return map[string]string{
+		"golang": "ghcr.io/woefe/motte/golang:latest",
+		"web":    "ghcr.io/woefe/motte/web:latest",
+	}
+}
+
 // TestBuiltinProfilesLoad loads every built-in profile and checks the shared
 // base plus the launch-time resolution: cwd-relative mounts, env-fed secrets,
 // and the static sanity of the definitions.
 func TestBuiltinProfilesLoad(t *testing.T) {
-	images := map[string]string{
-		"golang": "ghcr.io/woefe/motte/golang:latest",
-		"web":    "ghcr.io/woefe/motte/web:latest",
-	}
+	isolatedConfigDir(t)
+	images := builtinImages()
 	for name, image := range images {
 		t.Run(name, func(t *testing.T) {
 			profile, err := loadProfile(name, fixtureEnv)
@@ -92,7 +105,30 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			if profile.network.Allow == nil || len(*profile.network.Allow) == 0 {
 				t.Fatal("network.allow empty")
 			}
-			assertAllowListed(t, *profile.network.Allow, "*.github.com", "host:tcp:9931")
+			// Every profile extends the base policy; extras stay in their owning
+			// profile, and nothing repeats.
+			assertAllowListed(t, *profile.network.Allow,
+				"dns", "*.github.com", "*.opencode.ai", "host:tcp:9931", "pypi.org")
+			exclusive := map[string]string{"go.dev": "golang", "registry.npmjs.org": "web"}
+			for target, owner := range exclusive {
+				if name == owner && !slices.Contains(*profile.network.Allow, target) {
+					t.Errorf("%s: allow misses its extra %q", name, target)
+				}
+				if name != owner && slices.Contains(*profile.network.Allow, target) {
+					t.Errorf("%s: allow carries %s's extra %q", name, owner, target)
+				}
+			}
+			wantLen := map[string]int{"golang": 21, "web": 17}[name]
+			if len(*profile.network.Allow) != wantLen {
+				t.Errorf("allow len = %d, want %d", len(*profile.network.Allow), wantLen)
+			}
+			seen := make(map[string]bool, len(*profile.network.Allow))
+			for _, entry := range *profile.network.Allow {
+				if seen[entry] {
+					t.Errorf("allow has duplicate %q", entry)
+				}
+				seen[entry] = true
+			}
 
 			// The secret resolves from the host environment.
 			if len(profile.secrets) != 1 {
@@ -125,6 +161,7 @@ func assertAllowListed(t *testing.T, allow []string, targets ...string) {
 
 // TestLoadProfileUnknownProfile rejects a profile the binary does not ship.
 func TestLoadProfileUnknownProfile(t *testing.T) {
+	isolatedConfigDir(t)
 	_, err := loadProfile("rails", fixtureEnv)
 	if err == nil || !strings.Contains(err.Error(), "unknown profile") ||
 		!strings.Contains(err.Error(), "golang, web") {
@@ -134,6 +171,7 @@ func TestLoadProfileUnknownProfile(t *testing.T) {
 
 // TestLoadProfileRequiresSecretValue fails without the host env var set.
 func TestLoadProfileRequiresSecretValue(t *testing.T) {
+	isolatedConfigDir(t)
 	_, err := loadProfile("golang", func(string) string { return "" })
 	if err == nil || !strings.Contains(err.Error(), "OPENCODE_GO_KEY") {
 		t.Fatalf("error = %v, want a missing-env error naming OPENCODE_GO_KEY", err)

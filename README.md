@@ -36,6 +36,21 @@ msb exec -t <vm-name> -- opencode
 msb rm -f <vm-name>
 ```
 
+## User network policies
+
+Egress is deny-by-default with the built-in allow list; user config can widen it.
+To allow additional hosts, create `~/.config/motte/<profile>.yaml`, or `~/.config/motte/common.yaml` to apply to every profile:
+
+```yaml
+network:
+  allow:
+    - "*.example.com"
+```
+
+Entries use the same [microsandbox CLI rule](https://docs.microsandbox.dev/cli/configuration) `TARGET[:PROTO[:PORTS]]` grammar as the built-in profiles and are appended (deduplicated) to them.
+User config can only widen egress, never narrow it.
+Only `network.allow` is accepted; unknown keys or invalid entries fail the launch, with the file path in the error.
+
 ## Images
 
 CI rebuilds all images every Monday 04:00 UTC and on pushes touching `docker/**`.

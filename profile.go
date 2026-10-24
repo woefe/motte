@@ -85,6 +85,11 @@ func loadProfile(name string, getenv func(string) string) (*profile, error) {
 		return nil, fmt.Errorf("resolving the working directory: %w", err)
 	}
 	p := build()
+	extra, err := userAllow(name)
+	if err != nil {
+		return nil, err
+	}
+	p.extendAllow(extra)
 	if err := p.resolve(cwd, getenv); err != nil {
 		return nil, err
 	}
@@ -130,11 +135,36 @@ func (p *profile) resolve(cwd string, getenv func(string) string) error {
 	return nil
 }
 
+// baseAllow is the egress policy every profile shares
+var baseAllow = []string{
+	"dns",
+	"*.github.com",
+	"*.githubusercontent.com",
+	"*.opencode.ai",
+	// mirrors configured in docker/base/pacman-mirrorlist
+	"fastly.mirror.pkgbuild.com",
+	"geo.mirror.pkgbuild.com",
+	// llama.cpp on the host
+	"host:tcp:9931",
+	// default opencode websearch providers
+	"mcp.exa.ai",
+	"mcp.firecrawl.dev",
+	"search.parallel.ai",
+	"api.tavily.com",
+	"agent.tinyfish.ai",
+	// mise and sigstore for version and attestation lookups
+	"mise-versions.jdx.dev",
+	"tuf-repo-cdn.sigstore.dev",
+	// python for mise pypi backend, which is part of the base image
+	"pypi.org",
+	"files.pythonhosted.org",
+}
+
 // base returns the settings every profile shares: resources, the workspace
-// mount, TLS interception, the OpenCode Go secret, the connectivity check and
-// the default cmd.
+// mount, the base egress policy extended by every profile, TLS interception,
+// the OpenCode Go secret, the connectivity check and the default cmd.
 func base() *profile {
-	return &profile{
+	p := &profile{
 		cpus:      ptr(uint8(4)),
 		memoryMiB: ptr(uint32(4096)), // 4G
 		workdir:   ptr("/workspace"),
@@ -154,75 +184,54 @@ func base() *profile {
 			headerFields: []string{"authorization", "x-api-key"},
 		}},
 	}
+	p.extendAllow(baseAllow)
+	return p
 }
 
-// golangProfile overlays base() with the golang image and egress policy.
+// extendAllow widens the profile's egress policy with entries, skipping ones
+// already on the list. The list is copied, so constructors never share a
+// backing array.
+func (p *profile) extendAllow(entries []string) {
+	if p.network == nil {
+		p.network = &networkDoc{}
+	}
+	var allow []string
+	if p.network.Allow != nil {
+		allow = append(allow, *p.network.Allow...)
+	}
+	for _, entry := range entries {
+		if slices.Contains(allow, entry) {
+			continue
+		}
+		allow = append(allow, entry)
+	}
+	p.network.Allow = &allow
+}
+
+// golangProfile extends base() with the golang image and the Go toolchain's
+// egress policy.
 func golangProfile() *profile {
 	p := base()
 	p.name = "golang"
 	p.image = "ghcr.io/woefe/motte/golang:latest"
-	// gateway DNS, github (git/API/releases), opencode provider, llama host
-	// port; mise: version/attestation lookups + sigstore TUF trust root; go
-	// toolchain + module proxy; arch package mirrors (kept in sync with
-	// docker/pacman-mirrorlist); llama.cpp server on the host; websearch
-	// providers (opencode mcp endpoints); project specific.
-	p.network.Allow = ptr([]string{
-		"dns",
-		"*.github.com",
-		"*.githubusercontent.com",
-		"*.opencode.ai",
-		"mise-versions.jdx.dev",
-		"tuf-repo-cdn.sigstore.dev",
+	p.extendAllow([]string{
 		"go.dev",
 		"dl.google.com",
 		"proxy.golang.org",
 		"sum.golang.org",
 		"storage.googleapis.com",
-		"fastly.mirror.pkgbuild.com",
-		"geo.mirror.pkgbuild.com",
-		"host:tcp:9931",
-		"mcp.exa.ai",
-		"mcp.firecrawl.dev",
-		"search.parallel.ai",
-		"api.tavily.com",
-		"agent.tinyfish.ai",
-		"docs.microsandbox.dev",
-		"pypi.org", // for yamllint
-		"taskfile.dev",
-		"files.pythonhosted.org",
 	})
 	return p
 }
 
-// webProfile overlays base() with the web image and egress policy.
+// webProfile extends base() with the web image and the node toolchain's
+// egress policy.
 func webProfile() *profile {
 	p := base()
 	p.name = "web"
 	p.image = "ghcr.io/woefe/motte/web:latest"
-	// gateway DNS, github (git/API/releases), opencode provider; python: pypi
-	// index + file CDN; node: npm registry; mise: version/attestation lookups
-	// + sigstore TUF trust root; arch package mirrors (kept in sync with
-	// docker/pacman-mirrorlist); llama.cpp server on the host; websearch
-	// providers (opencode mcp endpoints).
-	p.network.Allow = ptr([]string{
-		"dns",
-		"*.github.com",
-		"*.githubusercontent.com",
-		"*.opencode.ai",
-		"pypi.org",
-		"files.pythonhosted.org",
-		"registry.npmjs.org",
-		"mise-versions.jdx.dev",
-		"tuf-repo-cdn.sigstore.dev",
-		"fastly.mirror.pkgbuild.com",
-		"geo.mirror.pkgbuild.com",
-		"host:tcp:9931",
-		"mcp.exa.ai",
-		"mcp.firecrawl.dev",
-		"search.parallel.ai",
-		"api.tavily.com",
-		"agent.tinyfish.ai",
-	})
+	// node: npm registry.
+	p.extendAllow([]string{"registry.npmjs.org"})
 	return p
 }
 
