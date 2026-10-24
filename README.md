@@ -38,7 +38,7 @@ msb rm -f motte-golang
 CI rebuilds all images every Monday 04:00 UTC and on pushes touching `docker/**`.
 Tags: `ghcr.io/woefe/motte/{base,golang,web}:{latest,YYYY-MM-DD}` — pin a specific weekly build via the date tag; `latest` is the rolling tag.
 
-**adopting a new weekly image**: images rebuild on schedule; `go run .` re-pulls `:latest` and recreates the sandbox - sessions/config live on the sandbox's own root disk and are kept across stop/start.
+**adopting a new weekly image**: images rebuild on schedule; `go run . <profile>` re-pulls `:latest` and recreates the sandbox - sessions/config live on the sandbox's own root disk and are kept across stop/start.
 
 ## Default OpenCode inference providers
 The default opencode config sets up a llama.cpp and OpenCode Go inference providers
