@@ -1,48 +1,12 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
 )
-
-func TestParseSizeMiB(t *testing.T) {
-	tests := []struct {
-		input  string
-		want   uint32
-		wantRe string // expected error substring
-	}{
-		{input: "4G", want: 4096},
-		{input: "4g", want: 4096},
-		{input: " 4G ", want: 4096},
-		{input: "1.5G", want: 1536},
-		{input: "512M", want: 512},
-		{input: "512m", want: 512},
-		{input: "4", want: 4},
-		{input: "0", want: 0},
-		{input: "512K", wantRe: "invalid size"},
-		{input: "-1G", wantRe: "finite"},
-		{input: "abc", wantRe: "invalid size"},
-		{input: "1e3", wantRe: "invalid size"},
-	}
-	for _, test := range tests {
-		got, err := parseSizeMiB(test.input)
-		if test.wantRe != "" {
-			if err == nil || !strings.Contains(err.Error(), test.wantRe) {
-				t.Errorf("parseSizeMiB(%q) error = %v, want containing %q", test.input, err, test.wantRe)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("parseSizeMiB(%q) = %v", test.input, err)
-			continue
-		}
-		if got != test.want {
-			t.Errorf("parseSizeMiB(%q) = %d, want %d", test.input, got, test.want)
-		}
-	}
-}
 
 // dnsRule is the expansion every plain dns entry shares.
 var dnsRule = m.PolicyRule{
@@ -51,6 +15,25 @@ var dnsRule = m.PolicyRule{
 	Destination: "host",
 	Protocols:   []m.PolicyProtocol{m.PolicyProtocolUDP, m.PolicyProtocolTCP},
 	Port:        "53",
+}
+
+// assertFindRule finds a rule by destination and, when ports is non-empty, by
+// that port, then compares it field by field. The dns and host:tcp:9931
+// entries both resolve to the `host` destination, so a port selects between
+// them.
+func assertFindRule(t *testing.T, rules []m.PolicyRule, want m.PolicyRule, ports string) {
+	t.Helper()
+	for _, got := range rules {
+		if got.Destination != want.Destination {
+			continue
+		}
+		if ports != "" && got.Port != ports && !slices.Contains(got.Ports, ports) {
+			continue
+		}
+		assertRule(t, got, want)
+		return
+	}
+	t.Fatalf("rules lack a %q entry (port %q)", want.Destination, ports)
 }
 
 // assertRule compares rules field by field; PolicyRule holds slices and
@@ -237,8 +220,7 @@ func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
 }
 
 func TestSandboxOptionsTranslateProfile(t *testing.T) {
-	dir := writeGolangFixtures(t)
-	profile, err := loadProfile(dir, "golang", fixtureEnv)
+	profile, err := loadProfile("golang", fixtureEnv)
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}
@@ -285,17 +267,20 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
 		t.Fatalf("Network = %+v", config.Network)
 	}
-	if len(config.Network.Rules) != 3 {
-		t.Fatalf("Network.Rules = %+v, want 3", config.Network.Rules)
+	// One rule per allow entry, in declared order.
+	if len(config.Network.Rules) != len(*profile.network.Allow) {
+		t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*profile.network.Allow))
 	}
-	assertRule(t, config.Network.Rules[0], dnsRule)
-	assertRule(t, config.Network.Rules[1], m.PolicyRule{
+	// Spot-check the rule kinds the profile uses: the semantic dns target, a
+	// domain suffix, and a host port.
+	assertFindRule(t, config.Network.Rules, dnsRule, "53")
+	assertFindRule(t, config.Network.Rules, m.PolicyRule{
 		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
-	})
-	assertRule(t, config.Network.Rules[2], m.PolicyRule{
+	}, "")
+	assertFindRule(t, config.Network.Rules, m.PolicyRule{
 		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
 		Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Ports: []string{"9931"},
-	})
+	}, "9931")
 	if config.Network.TLS == nil {
 		t.Error("Network.TLS not enabled")
 	}
@@ -316,8 +301,7 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 }
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
-	dir := writeGolangFixtures(t)
-	profile, err := loadProfile(dir, "golang", fixtureEnv)
+	profile, err := loadProfile("golang", fixtureEnv)
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}

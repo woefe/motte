@@ -9,7 +9,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -358,44 +357,4 @@ func trailingJunkError(entry string) error {
 		"network rule %q has trailing fields after the ports; if this is an IPv6 address, wrap it as [<addr>]",
 		entry,
 	)
-}
-
-// parseSizeMiB parses a CLI size string into MiB: bare numbers are MiB, M is
-// MiB, and G (also fractional, like 1.5G) is GiB.
-func parseSizeMiB(s string) (uint32, error) {
-	s = strings.TrimSpace(s)
-	if n, ok := cutAnySuffix(s, "G", "g"); ok {
-		value, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size: %w", err)
-		}
-		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
-			return 0, fmt.Errorf("size must be a finite positive number")
-		}
-		mib := value * 1024
-		if mib > math.MaxUint32 {
-			return 0, fmt.Errorf("size too large")
-		}
-		return uint32(mib), nil
-	}
-	if n, ok := cutAnySuffix(s, "M", "m"); ok {
-		value, err := strconv.ParseUint(strings.TrimSpace(n), 10, 32)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size: %w", err)
-		}
-		return uint32(value), nil
-	}
-	value, err := strconv.ParseUint(s, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size (expected e.g. 512M, 1G): %w", err)
-	}
-	return uint32(value), nil
-}
-
-// cutAnySuffix strips either suffix from s.
-func cutAnySuffix(s, suffix1, suffix2 string) (string, bool) {
-	if rest, ok := strings.CutSuffix(s, suffix1); ok {
-		return rest, true
-	}
-	return strings.CutSuffix(s, suffix2)
 }

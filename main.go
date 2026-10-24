@@ -1,4 +1,4 @@
-// Command motte launches an OpenCode sandbox from a profile in sandboxes/.
+// Command motte launches an OpenCode sandbox from a built-in profile.
 //
 // Usage:
 //
@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
@@ -34,13 +33,13 @@ func run(args []string) int {
 		return 1
 	}
 
-	profile, err := loadProfile(filepath.Join(sourceDir(), "sandboxes"), profileName, os.Getenv)
+	profile, err := loadProfile(profileName, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
 		return 1
 	}
 	if len(profile.cmd) == 0 {
-		fmt.Fprintf(os.Stderr, "motte: profile %s has no cmd to attach to; set cmd in sandboxes/*.yaml\n", profileName)
+		fmt.Fprintf(os.Stderr, "motte: profile %s has no cmd to attach to\n", profileName)
 		return 1
 	}
 
@@ -113,17 +112,6 @@ func parseArgs(args []string) (profile string, noPull, replace bool, err error) 
 		return "", false, false, fmt.Errorf("no profile given (expected golang|web)")
 	}
 	return profile, noPull, replace, nil
-}
-
-// sourceDir returns the directory of this source file: the repo root.
-// It keeps the sandboxes/ configs next to the launcher regardless of the
-// working directory it is started from.
-func sourceDir() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "."
-	}
-	return filepath.Dir(file)
 }
 
 // dirHash returns a short hash of the resolved current working directory, so

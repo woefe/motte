@@ -19,7 +19,7 @@ tasks:
 
   yamllint:
     cmds:
-      - yamllint sandboxes/*.yaml .github/workflows/*.yml Taskfile.yml
+      - yamllint .github/workflows/*.yml Taskfile.yml
 
   hadolint:
     cmds:

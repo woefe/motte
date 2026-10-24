@@ -11,8 +11,8 @@ Motte provides profiles for isolated development environments for agentic develo
 
 ## Project layout
 - docker: docker images for the various development environments; build them locally with `task build-images`
-- sandboxes: microsandbox configs including network policies and common settings
 - motte launcher. `go run . <golang|web> [--no-pull]` starts a profile in an isolated microsandbox VM via the Go SDK
+- built-in profiles are defined as Go structs in `profile.go` (compiled into the binary)
 
 ## Project constraints
 - Write markdown `.md` files one sentence per line

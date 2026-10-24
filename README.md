@@ -21,7 +21,7 @@ This pulls the CI-built image, starts a microsandbox microVM, and launches the O
 Each directory has its own VM, named after a hash of that directory; the launcher prints the name it uses.
 A directory's VM is reused across runs, so sessions and config on its root disk are kept; pass `--replace` to recreate the VM from scratch.
 Add `--no-pull` to skip the registry pull so a locally loaded image can win.
-The profiles live in `sandboxes/common.yaml` plus `sandboxes/<name>.yaml`; both follow the [microsandbox CLI config](https://docs.microsandbox.dev/cli/configuration) schema, and the launcher rejects fields it cannot translate.
+The profiles are compiled into the launcher (see `profile.go`); a profile image or egress policy change therefore goes through a rebuild rather than a config edit.
 
 Useful one-offs (substitute the VM name the launcher printed):
 
