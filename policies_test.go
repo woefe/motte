@@ -280,6 +280,42 @@ func TestPoliciesConfigureCreatesTheTemplate(t *testing.T) {
 	}
 }
 
+// TestPoliciesConfigureCreatesTheProjectTemplate covers the project scope: the
+// template names the directory the policy belongs to.
+func TestPoliciesConfigureCreatesTheProjectTemplate(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("VISUAL", "true")
+	t.Setenv("EDITOR", "true")
+	if err := runPoliciesConfigure("project"); err != nil {
+		t.Fatalf("runPoliciesConfigure: %v", err)
+	}
+	path, err := policyTargetPath(policyTarget{scope: scopePolicyProject, hash: mustDirHash(t)})
+	if err != nil {
+		t.Fatalf("policyTargetPath: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the policy file: %v", err)
+	}
+	project, err := projectPath()
+	if err != nil {
+		t.Fatalf("projectPath: %v", err)
+	}
+	if !strings.Contains(string(content), "Project path: "+project) {
+		t.Errorf("policy file = %q, want the project path", string(content))
+	}
+}
+
+// mustDirHash returns the hash of the current directory.
+func mustDirHash(t *testing.T) string {
+	t.Helper()
+	hash, err := dirHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
 // TestPoliciesConfigureRejectsAnInvalidFile covers the validation after the
 // editor exits.
 func TestPoliciesConfigureRejectsAnInvalidFile(t *testing.T) {

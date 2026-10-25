@@ -120,10 +120,10 @@ func bootProfile(profileName string, noPull, replace bool) (int, error) {
 	return code, nil
 }
 
-// dirHash returns a short hash of the resolved current working directory, so
-// every directory maps to one stable, unique sandbox-name fragment.
-// Symlinks are resolved first so linked or renamed paths share a sandbox.
-func dirHash() (string, error) {
+// projectPath returns the resolved current working directory, the directory
+// the project-scoped files and sandboxes belong to. Symlinks are resolved so
+// linked or renamed paths share a scope.
+func projectPath() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("resolving the working directory: %w", err)
@@ -131,6 +131,16 @@ func dirHash() (string, error) {
 	resolved, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return "", fmt.Errorf("resolving symlinks in %s: %w", cwd, err)
+	}
+	return resolved, nil
+}
+
+// dirHash returns a short hash of the resolved current working directory, so
+// every directory maps to one stable, unique sandbox-name fragment.
+func dirHash() (string, error) {
+	resolved, err := projectPath()
+	if err != nil {
+		return "", err
 	}
 	sum := sha256.Sum256([]byte(resolved))
 	return hex.EncodeToString(sum[:6]), nil

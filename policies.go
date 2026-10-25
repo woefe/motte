@@ -187,26 +187,38 @@ func readPolicyFile(path string) ([]string, error) {
 	return allow, nil
 }
 
-// policyTemplate returns the commented skeleton of a new policy file.
-func policyTemplate(target policyTarget) string {
-	return fmt.Sprintf(`# motte network policy — %s
-#
-# Entries extend the built-in egress policy; they cannot narrow it.
+// policyTemplate returns the commented skeleton of a new policy file. A
+// project policy names the directory it belongs to, so the file identifies
+// its location.
+func policyTemplate(target policyTarget) (string, error) {
+	header := fmt.Sprintf("# motte network policy — %s\n#\n", policyTargetLabel(target))
+	if target.scope == scopePolicyProject {
+		path, err := projectPath()
+		if err != nil {
+			return "", err
+		}
+		header += fmt.Sprintf("# Project path: %s\n#\n", path)
+	}
+	return header + `# Entries extend the built-in egress policy; they cannot narrow it.
 # Every entry uses the microsandbox CLI rule grammar, TARGET[:PROTO[:PORTS]]:
 #   - "*.example.com"
 #   - "host:tcp:9931"
 network:
   allow:
     # - "*.example.com"
-`, policyTargetLabel(target))
+`, nil
 }
 
 // writePolicyTemplate creates a policy file with the commented skeleton.
 func writePolicyTemplate(path string, target policyTarget) error {
+	template, err := policyTemplate(target)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(policyTemplate(target)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
 		return fmt.Errorf("writing policy %s: %w", path, err)
 	}
 	return nil
