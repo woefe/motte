@@ -61,6 +61,7 @@ type mountSpec struct {
 
 // builtins lists the profiles compiled into the binary.
 var builtins = map[string]func() *profile{
+	"base":   baseProfile,
 	"golang": golangProfile,
 	"rails":  railsProfile,
 	"web":    webProfile,
@@ -183,6 +184,16 @@ func (p *profile) extendAllow(entries []string) {
 		allow = append(allow, entry)
 	}
 	p.network.Allow = &allow
+}
+
+// baseProfile extends base() with the bare base image: the shared tooling
+// only (opencode, mise, git, podman), no profile-specific toolchain, and the
+// shared egress policy without extras.
+func baseProfile() *profile {
+	p := base()
+	p.name = "base"
+	p.image = "ghcr.io/woefe/motte/base:latest"
+	return p
 }
 
 // golangProfile extends base() with the golang image and the Go toolchain's

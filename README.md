@@ -13,6 +13,7 @@ Building images locally also needs `podman` and [Task](https://taskfile.dev).
 ## Usage
 
 ```sh
+go run . base     # base profile
 go run . golang   # golang profile
 go run . rails    # rails profile
 go run . web      # web profile

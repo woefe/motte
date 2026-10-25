@@ -14,6 +14,7 @@ func TestParseArgs(t *testing.T) {
 		replace bool
 		wantRe  string // expected error substring, or "" for success
 	}{
+		{name: "base profile", args: []string{"base"}, profile: "base"},
 		{name: "golang profile", args: []string{"golang"}, profile: "golang"},
 		{name: "web profile", args: []string{"web"}, profile: "web"},
 		{name: "rails profile", args: []string{"rails"}, profile: "rails"},

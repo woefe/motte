@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	go run . <golang|rails|web> [--no-pull] [--replace]
+//	go run . <base|golang|rails|web> [--no-pull] [--replace]
 //	go run . secrets <add|set|configure|rm|ls|mv>
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
