@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	go run . <golang|web> [--no-pull] [--replace]
+//	go run . <golang|rails|web> [--no-pull] [--replace]
 //	go run . secrets <add|set|configure|rm|ls|mv>
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
@@ -108,29 +108,39 @@ func run(args []string) int {
 	return code
 }
 
-// parseArgs takes a profile name and/or --no-pull and --replace in any order.
-// It fails when no profile is given and on anything else.
+// parseArgs takes a built-in profile name and/or --no-pull and --replace in
+// any order. It fails when no profile is given and on anything else.
 func parseArgs(args []string) (profile string, noPull, replace bool, err error) {
 	set := false
 	for _, arg := range args {
-		switch arg {
-		case "golang", "web":
+		// Every built-in profile name is a valid value; anything else must be
+		// a flag.
+		if _, ok := builtins[arg]; ok {
 			profile = arg
 			set = true
+			continue
+		}
+		switch arg {
 		case "--no-pull":
 			noPull = true
 		case "--replace":
 			replace = true
 		default:
 			return "", false, false, fmt.Errorf(
-				"unknown argument: %s (expected golang|web, --no-pull, or --replace)", arg,
+				"unknown argument: %s (expected %s, --no-pull, or --replace)", arg, choices(),
 			)
 		}
 	}
 	if !set {
-		return "", false, false, fmt.Errorf("no profile given (expected golang|web)")
+		return "", false, false, fmt.Errorf("no profile given (expected one of %s)", choices())
 	}
 	return profile, noPull, replace, nil
+}
+
+// choices names the built-in profiles for the usage errors: a pipe-joined,
+// sorted list.
+func choices() string {
+	return strings.Join(availableProfiles(), "|")
 }
 
 // dirHash returns a short hash of the resolved current working directory, so

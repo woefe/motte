@@ -14,6 +14,7 @@ Building images locally also needs `podman` and [Task](https://taskfile.dev).
 
 ```sh
 go run . golang   # golang profile
+go run . rails    # rails profile
 go run . web      # web profile
 ```
 
@@ -54,7 +55,7 @@ Only `network.allow` is accepted; unknown keys or invalid entries fail the launc
 ## Images
 
 CI rebuilds all images every Monday 04:00 UTC and on pushes touching `docker/**`.
-Tags: `ghcr.io/woefe/motte/{base,golang,web}:{latest,YYYY-MM-DD}` — pin a specific weekly build via the date tag; `latest` is the rolling tag.
+Tags: `ghcr.io/woefe/motte/{base,golang,rails,web}:{latest,YYYY-MM-DD}` — pin a specific weekly build via the date tag; `latest` is the rolling tag.
 
 **adopting a new weekly image**: images rebuild on schedule; run `go run . <profile> --replace` to re-pull `:latest` and recreate the VM.
 

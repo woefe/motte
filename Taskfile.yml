@@ -34,12 +34,12 @@ tasks:
 
   # Local builds for trying image changes without pushing: the images are
   # tagged with the same ghcr.io refs the profiles reference, so a subsequent
-  # `go run . <profile> --no-pull` boots them. name=golang or name=web builds
-  # the base plus that one variant.
+  # `go run . <profile> --no-pull` boots them. name=golang, name=rails, or
+  # name=web builds the base plus that one variant.
   build-images:
-    desc: Build images locally and load them into the msb cache (name=golang|web builds one variant)
+    desc: Build images locally and load them into the msb cache (name=golang|rails|web builds one variant)
     vars:
-      PROFILES: '{{if .name}}{{.name}}{{else}}golang web{{end}}'
+      PROFILES: '{{if .name}}{{.name}}{{else}}golang rails web{{end}}'
     cmds:
       - task: image-base
       - for:

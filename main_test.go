@@ -16,14 +16,16 @@ func TestParseArgs(t *testing.T) {
 	}{
 		{name: "golang profile", args: []string{"golang"}, profile: "golang"},
 		{name: "web profile", args: []string{"web"}, profile: "web"},
+		{name: "rails profile", args: []string{"rails"}, profile: "rails"},
 		{name: "golang with no-pull", args: []string{"golang", "--no-pull"}, profile: "golang", noPull: true},
 		{name: "no-pull before profile", args: []string{"--no-pull", "web"}, profile: "web", noPull: true},
 		{name: "golang with replace", args: []string{"golang", "--replace"}, profile: "golang", replace: true},
+		{name: "rails with no-pull", args: []string{"rails", "--no-pull"}, profile: "rails", noPull: true},
 		{name: "no arguments", args: []string{}, wantRe: "no profile given"},
 		{name: "only no-pull", args: []string{"--no-pull"}, wantRe: "no profile given"},
 		{name: "only replace", args: []string{"--replace"}, wantRe: "no profile given"},
-		{name: "unknown argument", args: []string{"rails"}, wantRe: "unknown argument"},
-		{name: "unknown arg, no profile", args: []string{"rails", "--no-pull"}, wantRe: "unknown argument"},
+		{name: "unknown argument", args: []string{"python"}, wantRe: "unknown argument"},
+		{name: "unknown arg, no profile", args: []string{"python", "--no-pull"}, wantRe: "unknown argument"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -29,6 +29,7 @@ func isolatedConfigDir(t *testing.T) {
 func builtinImages() map[string]string {
 	return map[string]string{
 		"golang": "ghcr.io/woefe/motte/golang:latest",
+		"rails":  "ghcr.io/woefe/motte/rails:latest",
 		"web":    "ghcr.io/woefe/motte/web:latest",
 	}
 }
@@ -98,19 +99,25 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 				t.Fatal("network.allow empty")
 			}
 			// Every profile extends the base policy; extras stay in their owning
-			// profile, and nothing repeats.
+			// profiles, and nothing repeats.
 			assertAllowListed(t, *profile.network.Allow,
 				"dns", "*.github.com", "*.opencode.ai", "host:tcp:9931", "pypi.org")
-			exclusive := map[string]string{"go.dev": "golang", "registry.npmjs.org": "web"}
-			for target, owner := range exclusive {
-				if name == owner && !slices.Contains(*profile.network.Allow, target) {
+			// registry.npmjs.org serves the node toolchain in web and rails.
+			exclusive := map[string][]string{
+				"go.dev":             {"golang"},
+				"registry.npmjs.org": {"web", "rails"},
+				"rubygems.org":       {"rails"},
+				"index.rubygems.org": {"rails"},
+			}
+			for target, owners := range exclusive {
+				if slices.Contains(owners, name) && !slices.Contains(*profile.network.Allow, target) {
 					t.Errorf("%s: allow misses its extra %q", name, target)
 				}
-				if name != owner && slices.Contains(*profile.network.Allow, target) {
-					t.Errorf("%s: allow carries %s's extra %q", name, owner, target)
+				if !slices.Contains(owners, name) && slices.Contains(*profile.network.Allow, target) {
+					t.Errorf("%s: allow carries %s's extra %q", name, strings.Join(owners, ","), target)
 				}
 			}
-			wantLen := map[string]int{"golang": 21, "web": 17}[name]
+			wantLen := map[string]int{"golang": 21, "rails": 19, "web": 17}[name]
 			if len(*profile.network.Allow) != wantLen {
 				t.Errorf("allow len = %d, want %d", len(*profile.network.Allow), wantLen)
 			}
@@ -142,9 +149,9 @@ func assertAllowListed(t *testing.T, allow []string, targets ...string) {
 // TestLoadProfileUnknownProfile rejects a profile the binary does not ship.
 func TestLoadProfileUnknownProfile(t *testing.T) {
 	isolatedConfigDir(t)
-	_, err := loadProfile("rails")
+	_, err := loadProfile("python")
 	if err == nil || !strings.Contains(err.Error(), "unknown profile") ||
-		!strings.Contains(err.Error(), "golang, web") {
-		t.Fatalf("loadProfile(rails) error = %v, want an unknown-profile error listing golang, web", err)
+		!strings.Contains(err.Error(), "golang, rails, web") {
+		t.Fatalf("loadProfile(python) error = %v, want an unknown-profile error listing golang, rails, web", err)
 	}
 }

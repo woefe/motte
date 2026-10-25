@@ -70,7 +70,7 @@ func TestParseSecretName(t *testing.T) {
 		{name: "", wantErr: "empty secret name"},
 		{name: "golang//FOO", wantErr: "invalid secret name"},
 		{name: "a/b/c/d", wantErr: "at most three segments"},
-		{name: "rails/FOO", wantErr: "not a built-in profile"},
+		{name: "rails/FOO", wantScope: scopeProfile, wantProfile: "rails", wantLeaf: "FOO"},
 		{name: "webserver/FOO", wantErr: "not a built-in profile"},
 		{name: "web/12345/FOO", wantErr: "project hash"},
 		{name: "golang/1234567890AB/FOO", wantErr: "project hash"},

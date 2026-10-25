@@ -62,6 +62,7 @@ type mountSpec struct {
 // builtins lists the profiles compiled into the binary.
 var builtins = map[string]func() *profile{
 	"golang": golangProfile,
+	"rails":  railsProfile,
 	"web":    webProfile,
 }
 
@@ -208,6 +209,17 @@ func webProfile() *profile {
 	p.image = "ghcr.io/woefe/motte/web:latest"
 	// node: npm registry.
 	p.extendAllow([]string{"registry.npmjs.org"})
+	return p
+}
+
+// railsProfile extends base() with the rails image and the Ruby toolchain's
+// egress policy.
+func railsProfile() *profile {
+	p := base()
+	p.name = "rails"
+	p.image = "ghcr.io/woefe/motte/rails:latest"
+	// bundler: the compact index and gem downloads; jsbundling: npm registry.
+	p.extendAllow([]string{"rubygems.org", "index.rubygems.org", "registry.npmjs.org"})
 	return p
 }
 
