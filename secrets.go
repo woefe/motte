@@ -7,9 +7,9 @@
 // var, which the runtime resolves at every sandbox start.
 //
 // Names are path-like with scopes: NAME (global), <profile>/NAME (profile),
-// <profile>/<dirHash>/NAME (project + profile). Configurations live under
-// $XDG_CONFIG_HOME/motte/secrets mirroring the name layout, one YAML file per
-// secret, holding the allowed hosts and header fields.
+// and <hash>/NAME (project, the current directory). The settings of a scope
+// live in one file under $XDG_CONFIG_HOME/motte/secrets: global.yaml,
+// <profile>.yaml, and <hash>.yaml.
 package main
 
 import (
@@ -37,7 +37,7 @@ const (
 	secretHostVarPrefix = "MOTTE_SECRET_"
 )
 
-// defaultSecretHeaderFields is used when a secret config omits them.
+// defaultSecretHeaderFields is used when a secret entry omits them.
 var defaultSecretHeaderFields = []string{"authorization"}
 
 // opencodeSecretName is the secret motte hints at and migrates from older
@@ -76,14 +76,14 @@ type secretName struct {
 }
 
 var (
-	secretLeafPattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	secretHashPattern   = regexp.MustCompile(`^[0-9a-f]{12}$`)
-	secretProfileFormat = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+	secretLeafPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	secretHashPattern = regexp.MustCompile(`^[0-9a-f]{12}$`)
 )
 
 // parseSecretName validates a path-like secret name and resolves its scope.
-// A single segment is a global secret; two segments need a built-in profile
-// name; three segments need a profile and a 12-hex directory hash.
+// A single segment is a global secret; two segments are profile-scoped when
+// the first is a built-in profile name and project-scoped when it is a
+// project hash.
 func parseSecretName(name string) (secretName, error) {
 	if name == "" {
 		return secretName{}, fmt.Errorf("empty secret name")
@@ -94,26 +94,19 @@ func parseSecretName(name string) (secretName, error) {
 	case 1:
 		n.scope = scopeGlobal
 	case 2:
-		if err := validSecretScopeProfile(parts[0], name); err != nil {
-			return secretName{}, err
-		}
-		n.scope, n.profile = scopeProfile, parts[0]
-	case 3:
-		if err := validSecretScopeProfile(parts[0], name); err != nil {
-			return secretName{}, err
-		}
-		if !secretHashPattern.MatchString(parts[1]) {
+		switch {
+		case slices.Contains(availableProfiles(), parts[0]):
+			n.scope, n.profile = scopeProfile, parts[0]
+		case secretHashPattern.MatchString(parts[0]):
+			n.scope, n.hash = scopeProject, parts[0]
+		default:
 			return secretName{}, fmt.Errorf(
-				"invalid secret name %q: %q is not a project hash (12 hex chars)", name, parts[1])
+				"invalid secret name %q: %q is not a built-in profile (available: %s) nor a 12-hex project hash",
+				name, parts[0], strings.Join(availableProfiles(), ", "),
+			)
 		}
-		n.scope, n.profile, n.hash = scopeProject, parts[0], parts[1]
 	default:
-		return secretName{}, fmt.Errorf("invalid secret name %q: at most three segments", name)
-	}
-	for _, part := range parts[:len(parts)-1] {
-		if strings.ContainsAny(part, " \t\r\n") || filepath.Clean(part) != part {
-			return secretName{}, fmt.Errorf("invalid secret name %q", name)
-		}
+		return secretName{}, fmt.Errorf("invalid secret name %q: at most two segments", name)
 	}
 	n.leaf = parts[len(parts)-1]
 	if !secretLeafPattern.MatchString(n.leaf) {
@@ -123,14 +116,72 @@ func parseSecretName(name string) (secretName, error) {
 	return n, nil
 }
 
-// validSecretScopeProfile checks a name's profile segment: built-in profile
-// names, so a typo like rail/FOO fails at parse time.
-func validSecretScopeProfile(profile, name string) error {
-	if !secretProfileFormat.MatchString(profile) || !slices.Contains(availableProfiles(), profile) {
-		return fmt.Errorf("invalid secret name %q: %q is not a built-in profile (available: %s)",
-			name, profile, strings.Join(availableProfiles(), ", "))
+// secretScopeKey identifies a scope: the file its settings live in and the
+// prefix its secret names carry.
+type secretScopeKey struct {
+	scope   secretScope
+	profile string
+	hash    string
+}
+
+// scopeKeyOf returns the scope key a secret name belongs to.
+func scopeKeyOf(n secretName) secretScopeKey {
+	switch n.scope {
+	case scopeProfile:
+		return secretScopeKey{scope: scopeProfile, profile: n.profile}
+	case scopeProject:
+		return secretScopeKey{scope: scopeProject, hash: n.hash}
+	default:
+		return secretScopeKey{scope: scopeGlobal}
 	}
-	return nil
+}
+
+// prefix returns the scope prefix of a secret name.
+func (k secretScopeKey) prefix() string {
+	switch k.scope {
+	case scopeProfile:
+		return k.profile
+	case scopeProject:
+		return k.hash
+	default:
+		return ""
+	}
+}
+
+// name returns the full name of a secret in the scope.
+func (k secretScopeKey) name(envVar string) string {
+	if prefix := k.prefix(); prefix != "" {
+		return prefix + "/" + envVar
+	}
+	return envVar
+}
+
+// label renders the scope for messages and listings.
+func (k secretScopeKey) label() string {
+	switch k.scope {
+	case scopeProfile:
+		return "profile " + k.profile
+	case scopeProject:
+		return "project " + k.hash
+	default:
+		return "global"
+	}
+}
+
+// path returns the file the scope's settings live in.
+func (k secretScopeKey) path() (string, error) {
+	root, err := secretsDir()
+	if err != nil {
+		return "", err
+	}
+	name := "global.yaml"
+	switch k.scope {
+	case scopeProfile:
+		name = k.profile + ".yaml"
+	case scopeProject:
+		name = k.hash + ".yaml"
+	}
+	return filepath.Join(root, name), nil
 }
 
 // secretHostEnvVar returns the host env var a resolved secret value travels in.
@@ -198,96 +249,182 @@ func secretsDir() (string, error) {
 	return filepath.Join(dir, "motte", "secrets"), nil
 }
 
-// secretConfigPath maps a validated secret name to its YAML file path.
-func secretConfigPath(n secretName) (string, error) {
-	root, err := secretsDir()
-	if err != nil {
-		return "", err
-	}
-	rel := n.leaf
-	switch n.scope {
-	case scopeProfile:
-		rel = filepath.Join(n.profile, rel)
-	case scopeProject:
-		rel = filepath.Join(n.profile, n.hash, rel)
-	}
-	return filepath.Join(root, rel+".yaml"), nil
+// secretScopeDoc is the schema of a scope file: the secrets it holds.
+type secretScopeDoc struct {
+	Secrets map[string]secretEntryDoc `yaml:"secrets"`
 }
 
-// secretFileDoc is the strict secret config schema.
-type secretFileDoc struct {
+// secretEntryDoc is one secret's settings in a scope file.
+type secretEntryDoc struct {
 	Allow        []string `yaml:"allow"`
 	HeaderFields []string `yaml:"header_fields"`
 }
 
-// readSecretMeta strictly decodes one secret config file. The allow list is
-// required and validated as host patterns; header_fields default to
-// `authorization`.
-func readSecretMeta(n secretName) (secretSpec, error) {
-	path, err := secretConfigPath(n)
+// readSecretScope strictly decodes one scope file and returns the secrets it
+// holds, keyed by env var name. A missing file holds no secrets.
+func readSecretScope(key secretScopeKey) (map[string]secretSpec, error) {
+	path, err := key.path()
 	if err != nil {
-		return secretSpec{}, err
+		return nil, err
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return secretSpec{}, err
+		return nil, nil
 	}
 	if err != nil {
-		return secretSpec{}, fmt.Errorf("reading secret config %s: %w", path, err)
+		return nil, fmt.Errorf("reading secret config %s: %w", path, err)
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	var doc secretFileDoc
+	var doc secretScopeDoc
 	if err := decoder.Decode(&doc); err != nil {
-		return secretSpec{}, fmt.Errorf("invalid secret config %s: %w", path, err)
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return secretSpec{}, fmt.Errorf("invalid secret config %s: multiple YAML documents", path)
+		return nil, fmt.Errorf("invalid secret config %s: multiple YAML documents", path)
 	}
-	if len(doc.Allow) == 0 {
-		return secretSpec{}, fmt.Errorf("invalid secret config %s: allow is empty; at least one host is required", path)
-	}
-	for _, entry := range doc.Allow {
-		if err := validateSecretAllowEntry(entry); err != nil {
-			return secretSpec{}, fmt.Errorf("invalid secret config %s: %w", path, err)
+	secrets := make(map[string]secretSpec, len(doc.Secrets))
+	for envVar, entry := range doc.Secrets {
+		if len(entry.Allow) == 0 {
+			return nil, fmt.Errorf(
+				"invalid secret config %s: %s has an empty allow list; at least one host is required",
+				path, envVar)
+		}
+		for _, host := range entry.Allow {
+			if err := validateSecretAllowEntry(host); err != nil {
+				return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
+			}
+		}
+		for _, field := range entry.HeaderFields {
+			if strings.TrimSpace(field) == "" {
+				return nil, fmt.Errorf("invalid secret config %s: %s has an empty header field", path, envVar)
+			}
+		}
+		headerFields := entry.HeaderFields
+		if headerFields == nil {
+			headerFields = defaultSecretHeaderFields
+		}
+		secrets[envVar] = secretSpec{
+			name:         key.name(envVar),
+			envVar:       envVar,
+			allow:        entry.Allow,
+			headerFields: headerFields,
 		}
 	}
-	for _, field := range doc.HeaderFields {
-		if strings.TrimSpace(field) == "" {
-			return secretSpec{}, fmt.Errorf("invalid secret config %s: empty header field", path)
+	return secrets, nil
+}
+
+// secretScopeNode returns the document of a scope file, with an empty
+// "secrets" mapping when the file does not exist yet.
+func secretScopeNode(path string) (*yaml.Node, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return emptySecretScope(), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading secret config %s: %w", path, err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
+	}
+	if len(doc.Content) == 0 {
+		return emptySecretScope(), nil
+	}
+	return &doc, nil
+}
+
+// emptySecretScope returns an empty scope document.
+func emptySecretScope() *yaml.Node {
+	return &yaml.Node{
+		Kind: yaml.DocumentNode,
+		Content: []*yaml.Node{
+			{Kind: yaml.MappingNode, Tag: "!!map"},
+		},
+	}
+}
+
+// secretsMapping returns the "secrets" mapping of a scope document, creating
+// it when it is missing.
+func secretsMapping(doc *yaml.Node) (*yaml.Node, error) {
+	if len(doc.Content) == 0 {
+		return nil, fmt.Errorf("the secret config has no document")
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("the secret config is not a mapping")
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "secrets" {
+			mapping := root.Content[i+1]
+			if mapping.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("the secret config's `secrets` is not a mapping")
+			}
+			return mapping, nil
 		}
 	}
-	if doc.HeaderFields == nil {
-		doc.HeaderFields = defaultSecretHeaderFields
-	}
-	return secretSpec{name: n.full, envVar: n.leaf, allow: doc.Allow, headerFields: doc.HeaderFields}, nil
+	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	root.Content = append(root.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "secrets"},
+		mapping)
+	return mapping, nil
 }
 
-// secretMetaExists reports whether a secret config file exists.
-func secretMetaExists(n secretName) bool {
-	path, err := secretConfigPath(n)
-	if err != nil {
-		return false
+// setSecretEntry adds or replaces one secret in a scope mapping.
+func setSecretEntry(mapping *yaml.Node, envVar string, spec secretSpec) {
+	value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	allow := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, host := range spec.allow {
+		allow.Content = append(allow.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: host})
 	}
-	_, statErr := os.Stat(path)
-	return statErr == nil
+	headers := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, field := range spec.headerFields {
+		headers.Content = append(headers.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: field})
+	}
+	value.Content = append(value.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "allow"}, allow,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "header_fields"}, headers)
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == envVar {
+			mapping.Content[i+1] = value
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: envVar}, value)
 }
 
-// writeSecretMeta atomically writes one secret config file.
-func writeSecretMeta(n secretName, spec secretSpec) error {
-	path, err := secretConfigPath(n)
-	if err != nil {
-		return err
+// removeSecretEntry drops one secret from a scope mapping and reports
+// whether it was there.
+func removeSecretEntry(mapping *yaml.Node, envVar string) bool {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == envVar {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+			return true
+		}
 	}
-	data, err := yaml.Marshal(secretFileDoc{Allow: spec.allow, HeaderFields: spec.headerFields})
-	if err != nil {
+	return false
+}
+
+// writeSecretScope writes a scope document atomically.
+func writeSecretScope(path string, doc *yaml.Node) error {
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(doc); err != nil {
+		return fmt.Errorf("serializing secret config %s: %w", path, err)
+	}
+	if err := encoder.Close(); err != nil {
 		return fmt.Errorf("serializing secret config %s: %w", path, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("writing secret config %s: %w", path, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -297,26 +434,75 @@ func writeSecretMeta(n secretName, spec secretSpec) error {
 	return nil
 }
 
-// removeSecretMeta deletes one secret config file and any now-empty scope
-// directories above it (project hash, then profile).
+// secretMetaExists reports whether a secret is configured in its scope.
+func secretMetaExists(n secretName) bool {
+	secrets, err := readSecretScope(scopeKeyOf(n))
+	if err != nil {
+		return false
+	}
+	_, ok := secrets[n.leaf]
+	return ok
+}
+
+// readSecretMeta returns the settings of one configured secret.
+func readSecretMeta(n secretName) (secretSpec, error) {
+	secrets, err := readSecretScope(scopeKeyOf(n))
+	if err != nil {
+		return secretSpec{}, err
+	}
+	spec, ok := secrets[n.leaf]
+	if !ok {
+		return secretSpec{}, fmt.Errorf("secret %s is not configured", n.full)
+	}
+	return spec, nil
+}
+
+// writeSecretMeta adds or replaces one secret in its scope file. The file
+// keeps the comments and the other secrets it holds.
+func writeSecretMeta(n secretName, spec secretSpec) error {
+	key := scopeKeyOf(n)
+	path, err := key.path()
+	if err != nil {
+		return err
+	}
+	doc, err := secretScopeNode(path)
+	if err != nil {
+		return err
+	}
+	mapping, err := secretsMapping(doc)
+	if err != nil {
+		return fmt.Errorf("invalid secret config %s: %w", path, err)
+	}
+	setSecretEntry(mapping, n.leaf, spec)
+	return writeSecretScope(path, doc)
+}
+
+// removeSecretMeta deletes one secret from its scope file and removes the
+// file when it holds no secret anymore.
 func removeSecretMeta(n secretName) error {
-	path, err := secretConfigPath(n)
+	key := scopeKeyOf(n)
+	path, err := key.path()
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("removing secret config %s: %w", path, err)
-	}
-	root, err := secretsDir()
+	doc, err := secretScopeNode(path)
 	if err != nil {
 		return err
 	}
-	for dir := filepath.Dir(path); dir != root; dir = filepath.Dir(dir) {
-		if os.Remove(dir) != nil {
-			break // not empty or already gone
+	mapping, err := secretsMapping(doc)
+	if err != nil {
+		return fmt.Errorf("invalid secret config %s: %w", path, err)
+	}
+	if !removeSecretEntry(mapping, n.leaf) {
+		return nil
+	}
+	if len(mapping.Content) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing secret config %s: %w", path, err)
 		}
+		return nil
 	}
-	return nil
+	return writeSecretScope(path, doc)
 }
 
 // validateSecretAllowEntry checks one secret allow host: an exact host, a
@@ -346,26 +532,20 @@ func scanEffectiveSecrets(profileName string) ([]secretSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	var effective []secretSpec
-	winner := map[string]int{} // leaf -> index of the winning secret so far
-	dirs := []struct {
-		scope secretScope
-		rel   string
-	}{
-		{scopeGlobal, ""},
-		{scopeProfile, profileName},
-		{scopeProject, profileName + "/" + hash},
+	keys := []secretScopeKey{
+		{scope: scopeGlobal},
+		{scope: scopeProfile, profile: profileName},
+		{scope: scopeProject, hash: hash},
 	}
-	for _, scope := range dirs {
-		names, err := listSecretConfigs(scope.rel, profileName)
+	var effective []secretSpec
+	winner := map[string]int{} // env var -> index of the winning secret so far
+	for _, key := range keys {
+		secrets, err := readSecretScope(key)
 		if err != nil {
 			return nil, err
 		}
-		for _, n := range names {
-			spec, err := readSecretMeta(n)
-			if err != nil {
-				return nil, err
-			}
+		for _, envVar := range sortedSecretNames(secrets) {
+			spec := secrets[envVar]
 			if idx, ok := winner[spec.envVar]; ok {
 				fmt.Fprintf(os.Stderr, "motte: secret %s is shadowed by the more specific %s\n",
 					effective[idx].name, spec.name)
@@ -379,65 +559,66 @@ func scanEffectiveSecrets(profileName string) ([]secretSpec, error) {
 	return effective, nil
 }
 
-// listSecretConfigs enumerates the YAML configs under a scope-relative dir,
-// returning their validated full names.
-func listSecretConfigs(rel string, profileName string) ([]secretName, error) {
+// sortedSecretNames returns the env var names of a scope in a stable order.
+func sortedSecretNames(secrets map[string]secretSpec) []string {
+	names := make([]string, 0, len(secrets))
+	for name := range secrets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// secretScopeKeys returns every scope that has a file in the secrets tree:
+// the global scope, the built-in profiles, and the project files.
+func secretScopeKeys() ([]secretScopeKey, error) {
 	root, err := secretsDir()
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(filepath.Join(root, rel))
+	keys := []secretScopeKey{{scope: scopeGlobal}}
+	for _, profile := range availableProfiles() {
+		keys = append(keys, secretScopeKey{scope: scopeProfile, profile: profile})
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return keys, nil
 		}
-		return nil, fmt.Errorf("reading %s: %w", filepath.Join(root, rel), err)
+		return nil, fmt.Errorf("reading %s: %w", root, err)
 	}
-	names := make([]secretName, 0, len(entries))
+	var hashes []string
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
 			continue
 		}
-		name := entry.Name()
-		if rel != "" {
-			name = rel + "/" + name
+		name := strings.TrimSuffix(entry.Name(), ".yaml")
+		if !secretHashPattern.MatchString(name) {
+			continue
 		}
-		n, err := parseSecretName(strings.TrimSuffix(name, ".yaml"))
-		if err != nil {
-			return nil, err
-		}
-		if profileName != "" && n.scope != scopeGlobal && n.profile != profileName {
-			return nil, fmt.Errorf(
-				"secret %s is scoped to profile %s, not %s", n.full, n.profile, profileName)
-		}
-		names = append(names, n)
+		hashes = append(hashes, name)
 	}
-	sort.Slice(names, func(i, j int) bool { return names[i].full < names[j].full })
-	return names, nil
+	sort.Strings(hashes)
+	for _, hash := range hashes {
+		keys = append(keys, secretScopeKey{scope: scopeProject, hash: hash})
+	}
+	return keys, nil
 }
 
-// secretCountAll returns how many secret configs exist under any scope; used
-// for the first-run hint.
+// secretCountAll returns how many secrets are configured under any scope;
+// used for the first-run hint.
 func secretCountAll() (int, error) {
-	root, err := secretsDir()
+	keys, err := secretScopeKeys()
 	if err != nil {
 		return 0, err
 	}
 	count := 0
-	err = filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+	for _, key := range keys {
+		secrets, err := readSecretScope(key)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			return err
+			return 0, err
 		}
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".yaml" {
-			count++
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("scanning %s: %w", root, err)
+		count += len(secrets)
 	}
 	return count, nil
 }

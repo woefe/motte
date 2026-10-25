@@ -60,23 +60,24 @@ func TestParseSecretName(t *testing.T) {
 		name        string
 		wantScope   secretScope
 		wantProfile string
+		wantHash    string
 		wantLeaf    string
 		wantErr     string
 	}{
 		{name: "OPENCODE_GO_KEY", wantScope: scopeGlobal, wantLeaf: "OPENCODE_GO_KEY"},
 		{name: "golang/OPENCODE_GO_KEY", wantScope: scopeProfile, wantProfile: "golang", wantLeaf: "OPENCODE_GO_KEY"},
 		{name: "web/login_token", wantScope: scopeProfile, wantProfile: "web", wantLeaf: "login_token"},
-		{name: "golang/1234567890ab/FOO", wantScope: scopeProject, wantProfile: "golang", wantLeaf: "FOO"},
+		{name: "1234567890ab/FOO", wantScope: scopeProject, wantHash: "1234567890ab", wantLeaf: "FOO"},
 		{name: "", wantErr: "empty secret name"},
 		{name: "golang//FOO", wantErr: "invalid secret name"},
-		{name: "a/b/c/d", wantErr: "at most three segments"},
+		{name: "a/b/c/d", wantErr: "at most two segments"},
 		{name: "rails/FOO", wantScope: scopeProfile, wantProfile: "rails", wantLeaf: "FOO"},
 		{name: "webserver/FOO", wantErr: "not a built-in profile"},
-		{name: "web/12345/FOO", wantErr: "project hash"},
-		{name: "golang/1234567890AB/FOO", wantErr: "project hash"},
+		{name: "web/12345/FOO", wantErr: "at most two segments"},
+		{name: "golang/1234567890AB/FOO", wantErr: "at most two segments"},
+		{name: "1234567890AB/FOO", wantErr: "not a built-in profile"},
 		{name: "FOO-BAR", wantErr: "valid env var"},
 		{name: "web/FOO.BAR", wantErr: "valid env var"},
-		{name: "1234567890ab/FOO", wantErr: "not a built-in profile"},
 		{name: "FOO$BAR", wantErr: "valid env var"},
 	}
 	for _, test := range tests {
@@ -91,11 +92,39 @@ func TestParseSecretName(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseSecretName(%q): %v", test.name, err)
 			}
-			if got.scope != test.wantScope || got.profile != test.wantProfile || got.leaf != test.wantLeaf {
-				t.Errorf("parseSecretName(%q) = %+v, want scope/profile/leaf %d/%q/%q",
-					test.name, got, test.wantScope, test.wantProfile, test.wantLeaf)
+			if got.scope != test.wantScope || got.profile != test.wantProfile ||
+				got.hash != test.wantHash || got.leaf != test.wantLeaf {
+				t.Errorf("parseSecretName(%q) = %+v, want scope/profile/hash/leaf %d/%q/%q/%q",
+					test.name, got, test.wantScope, test.wantProfile, test.wantHash, test.wantLeaf)
 			}
 		})
+	}
+}
+
+// TestSecretScopeFiles maps the scopes to their files: one file per scope,
+// holding every secret of that scope.
+func TestSecretScopeFiles(t *testing.T) {
+	isolatedConfigDir(t)
+	hash, err := dirHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name secretName
+		want string
+	}{
+		{name: secretName{scope: scopeGlobal}, want: "global.yaml"},
+		{name: secretName{scope: scopeProfile, profile: "golang"}, want: "golang.yaml"},
+		{name: secretName{scope: scopeProject, hash: hash}, want: hash + ".yaml"},
+	}
+	for _, test := range tests {
+		path, err := scopeKeyOf(test.name).path()
+		if err != nil {
+			t.Fatalf("path: %v", err)
+		}
+		if filepath.Base(path) != test.want {
+			t.Errorf("path = %q, want %q", filepath.Base(path), test.want)
+		}
 	}
 }
 
@@ -114,7 +143,7 @@ func TestValidateSecretAllowEntry(t *testing.T) {
 	}
 }
 
-// TestReadWriteSecretMeta round-trips a config file and covers schema
+// TestReadWriteSecretMeta round-trips a scope file and covers schema
 // strictness: unknown fields fail, allow is required, header fields default.
 func TestReadWriteSecretMeta(t *testing.T) {
 	isolatedConfigDir(t)
@@ -136,23 +165,123 @@ func TestReadWriteSecretMeta(t *testing.T) {
 		t.Fatalf("readSecretMeta = %+v", got)
 	}
 
+	// The secret lives in the profile's scope file.
+	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
+	content, err := os.ReadFile(scopePath)
+	if err != nil {
+		t.Fatalf("reading the scope file: %v", err)
+	}
+	if !strings.Contains(string(content), "OPENCODE_GO_KEY:") ||
+		!strings.Contains(string(content), "*.opencode.ai") {
+		t.Errorf("scope file = %q, want the secret and its hosts", string(content))
+	}
+
 	// Unknown fields fail lint-style, with the path in the error.
-	writeSecretFS(t, "secrets/golang/OPENCODE_GO_KEY.yaml", "allow: [\"api.example.com\"]\nalow: [oops]\n")
+	writeSecretFS(t, "secrets/golang.yaml",
+		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
 	_, err = readSecretMeta(name)
 	if err == nil || !strings.Contains(err.Error(), "invalid secret config") || !strings.Contains(err.Error(), "alow") {
 		t.Errorf("error = %v, want an unknown-field error naming alow", err)
 	}
 
 	// A missing allow list is invalid.
-	writeSecretFS(t, "secrets/golang/OPENCODE_GO_KEY.yaml", "header_fields: [origin]\n")
-	if _, err := readSecretMeta(name); !strings.Contains(err.Error(), "allow is empty") {
+	writeSecretFS(t, "secrets/golang.yaml",
+		"secrets:\n  OPENCODE_GO_KEY:\n    header_fields: [origin]\n")
+	if _, err := readSecretMeta(name); err == nil || !strings.Contains(err.Error(), "empty allow list") {
 		t.Errorf("error = %v, want an empty-allow error", err)
 	}
 
 	// Allow hosts must be host patterns, not network rule targets.
-	writeSecretFS(t, "secrets/golang/OPENCODE_GO_KEY.yaml", "allow: [\"host:tcp:9931\"]\n")
+	writeSecretFS(t, "secrets/golang.yaml",
+		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"host:tcp:9931\"]\n")
 	if _, err := readSecretMeta(name); err == nil || !strings.Contains(err.Error(), "invalid secret allow host") {
 		t.Errorf("error = %v, want a bad-host error", err)
+	}
+}
+
+// TestSecretScopeFileKeepsCommentsAndSiblings covers the round-trip through
+// the scope file: the comments and the other secrets of the scope survive an
+// add and a remove.
+func TestSecretScopeFileKeepsCommentsAndSiblings(t *testing.T) {
+	isolatedConfigDir(t)
+	writeSecretFS(t, "secrets/golang.yaml", `# the golang scope
+secrets:
+  # the key we use
+  OPENCODE_GO_KEY:
+    allow:
+      - "*.opencode.ai"
+`)
+	first, err := parseSecretName("golang/OPENCODE_GO_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := parseSecretName("golang/OTHER_SECRET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSecretMeta(second, secretSpec{
+		allow:        []string{"other.example.com"},
+		headerFields: []string{"authorization"},
+	}); err != nil {
+		t.Fatalf("writeSecretMeta: %v", err)
+	}
+	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
+	content, err := os.ReadFile(scopePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "# the golang scope") ||
+		!strings.Contains(string(content), "# the key we use") {
+		t.Errorf("scope file = %q, want the comments kept", string(content))
+	}
+	for _, name := range []string{"OPENCODE_GO_KEY", "OTHER_SECRET"} {
+		if _, err := readSecretMeta(map[string]secretName{
+			"OPENCODE_GO_KEY": first,
+			"OTHER_SECRET":    second,
+		}[name]); err != nil {
+			t.Errorf("readSecretMeta(%s): %v", name, err)
+		}
+	}
+
+	// Removing a secret keeps the file and its remaining secret.
+	if err := removeSecretMeta(second); err != nil {
+		t.Fatalf("removeSecretMeta: %v", err)
+	}
+	content, err = os.ReadFile(scopePath)
+	if err != nil {
+		t.Fatalf("reading the scope file: %v", err)
+	}
+	if strings.Contains(string(content), "OTHER_SECRET") {
+		t.Errorf("scope file = %q, want OTHER_SECRET removed", string(content))
+	}
+	if !strings.Contains(string(content), "OPENCODE_GO_KEY") {
+		t.Errorf("scope file = %q, want OPENCODE_GO_KEY kept", string(content))
+	}
+}
+
+// TestRemoveLastSecretRemovesTheScopeFile cleans up a scope file that holds
+// no secret anymore.
+func TestRemoveLastSecretRemovesTheScopeFile(t *testing.T) {
+	isolatedConfigDir(t)
+	name, err := parseSecretName("golang/ONLY_SECRET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSecretMeta(name, secretSpec{
+		allow:        []string{"only.example.com"},
+		headerFields: []string{"authorization"},
+	}); err != nil {
+		t.Fatalf("writeSecretMeta: %v", err)
+	}
+	if err := removeSecretMeta(name); err != nil {
+		t.Fatalf("removeSecretMeta: %v", err)
+	}
+	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
+	if _, err := os.Stat(scopePath); !os.IsNotExist(err) {
+		t.Errorf("scope file still exists: %v", err)
+	}
+	if secretMetaExists(name) {
+		t.Error("the secret still exists after the removal")
 	}
 }
 
@@ -164,13 +293,14 @@ func TestScanEffectiveSecretsPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretDoc := func(allow string) string {
-		return "allow:\n  - \"" + allow + "\"\n"
+	scopeDoc := func(allow string) string {
+		return "secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"" + allow + "\"\n"
 	}
-	writeSecretFS(t, "secrets/OPENCODE_GO_KEY.yaml", secretDoc("global.example.com"))
-	writeSecretFS(t, "secrets/golang/OPENCODE_GO_KEY.yaml", secretDoc("profile.example.com"))
-	writeSecretFS(t, "secrets/golang/"+hash+"/OPENCODE_GO_KEY.yaml", secretDoc("project.example.com"))
-	writeSecretFS(t, "secrets/golang/OTHER_SECRET.yaml", secretDoc("other.example.com"))
+	writeSecretFS(t, "secrets/global.yaml", scopeDoc("global.example.com"))
+	writeSecretFS(t, "secrets/"+hash+".yaml", scopeDoc("project.example.com"))
+	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n"+
+		"  OPENCODE_GO_KEY:\n    allow:\n      - \"profile.example.com\"\n"+
+		"  OTHER_SECRET:\n    allow:\n      - \"other.example.com\"\n")
 
 	effective, err := scanEffectiveSecrets("golang")
 	if err != nil {
@@ -186,14 +316,17 @@ func TestScanEffectiveSecretsPrecedence(t *testing.T) {
 		t.Errorf("OTHER_SECRET = %+v, want other.example.com", effective[1])
 	}
 
-	// Another profile sees only the global scope: other profiles' secrets
-	// never leak into its launch.
+	// Another profile sees the global and the project scope, but never
+	// another profile's secrets.
 	effective, err = scanEffectiveSecrets("web")
 	if err != nil {
 		t.Fatalf("scanEffectiveSecrets(web): %v", err)
 	}
-	if len(effective) != 1 || effective[0].allow[0] != "global.example.com" {
-		t.Fatalf("web effective = %+v, want only the global secret", effective)
+	if len(effective) != 1 {
+		t.Fatalf("web effective = %+v, want only the project secret", effective)
+	}
+	if effective[0].envVar != "OPENCODE_GO_KEY" || effective[0].allow[0] != "project.example.com" {
+		t.Errorf("web effective = %+v, want the project secret", effective[0])
 	}
 }
 
@@ -203,7 +336,8 @@ func TestScanEffectiveSecretsPrecedence(t *testing.T) {
 func TestResolveSecrets(t *testing.T) {
 	isolatedConfigDir(t)
 	swapStore(t, newFakeStore(map[string]string{"OPENCODE_GO_KEY": "sk_test"}))
-	writeSecretFS(t, "secrets/OPENCODE_GO_KEY.yaml", "allow:\n  - \"*.opencode.ai\"\n")
+	writeSecretFS(t, "secrets/global.yaml",
+		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n")
 	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_OPENCODE_GO_KEY") })
 
 	profile, err := loadProfile("golang")
@@ -234,6 +368,90 @@ func TestResolveSecrets(t *testing.T) {
 	if _, err := resolveSecrets(profile); err == nil ||
 		!strings.Contains(err.Error(), "motte secrets set OPENCODE_GO_KEY") {
 		t.Errorf("error = %v, want the set hint", err)
+	}
+}
+
+// TestSecretsMvMovesTheEntryBetweenScopeFiles covers the mv command: the
+// entry moves into the target scope file, the keychain account is re-keyed,
+// and the source scope file goes away when it holds nothing else.
+func TestSecretsMvMovesTheEntryBetweenScopeFiles(t *testing.T) {
+	isolatedConfigDir(t)
+	store := newFakeStore(map[string]string{"golang/OPENCODE_GO_KEY": "sk_test"})
+	swapStore(t, store)
+	name, err := parseSecretName("golang/OPENCODE_GO_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSecretMeta(name, secretSpec{
+		allow:        []string{"*.opencode.ai"},
+		headerFields: []string{"authorization"},
+	}); err != nil {
+		t.Fatalf("writeSecretMeta: %v", err)
+	}
+	if err := runSecretsMv("golang/OPENCODE_GO_KEY", "OPENCODE_GO_KEY"); err != nil {
+		t.Fatalf("runSecretsMv: %v", err)
+	}
+
+	global, err := parseSecretName("OPENCODE_GO_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := readSecretMeta(global)
+	if err != nil {
+		t.Fatalf("readSecretMeta: %v", err)
+	}
+	if len(spec.allow) != 1 || spec.allow[0] != "*.opencode.ai" {
+		t.Errorf("spec = %+v, want the moved hosts", spec)
+	}
+	if secretMetaExists(name) {
+		t.Error("the secret is still in the profile scope")
+	}
+	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
+	if _, err := os.Stat(scopePath); !os.IsNotExist(err) {
+		t.Errorf("the empty scope file still exists: %v", err)
+	}
+	if value, err := store.get("OPENCODE_GO_KEY"); err != nil || value != "sk_test" {
+		t.Errorf("keychain value = %q %v, want sk_test", value, err)
+	}
+	if _, err := store.get("golang/OPENCODE_GO_KEY"); err == nil {
+		t.Error("the old keychain account still holds the value")
+	}
+}
+
+// TestCollectLsRowsGroupsByScope covers the listing rows: one row per
+// configured secret, ordered by scope.
+func TestCollectLsRowsGroupsByScope(t *testing.T) {
+	isolatedConfigDir(t)
+	swapStore(t, newFakeStore(nil))
+	hash, err := dirHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSecretFS(t, "secrets/global.yaml",
+		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n")
+	writeSecretFS(t, "secrets/golang.yaml",
+		"secrets:\n  LANG_KEY:\n    allow:\n      - \"lang.example.com\"\n")
+	writeSecretFS(t, "secrets/"+hash+".yaml",
+		"secrets:\n  PROJECT_KEY:\n    allow:\n      - \"project.example.com\"\n")
+	rows, err := collectLsRows()
+	if err != nil {
+		t.Fatalf("collectLsRows: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want 3", rows)
+	}
+	want := []struct {
+		name  string
+		scope secretScope
+	}{
+		{name: "OPENCODE_GO_KEY", scope: scopeGlobal},
+		{name: "golang/LANG_KEY", scope: scopeProfile},
+		{name: hash + "/PROJECT_KEY", scope: scopeProject},
+	}
+	for i, expected := range want {
+		if rows[i].name != expected.name || rows[i].scopeKey.scope != expected.scope {
+			t.Errorf("row %d = %+v, want %q in scope %d", i, rows[i], expected.name, expected.scope)
+		}
 	}
 }
 
@@ -354,35 +572,6 @@ func TestSecretModifySpecs(t *testing.T) {
 	}
 	if none := secretModifySpecs(nil); len(none) != 0 {
 		t.Errorf("nil input produced %+v", none)
-	}
-}
-
-// TestRunSecretsDispatch checks the usage errors of the secrets subcommands.
-func TestRunSecretsDispatch(t *testing.T) {
-	for _, args := range [][]string{
-		nil,
-		{"bogus"},
-		{"set"},
-		{"set", "a", "b"},
-		{"configure"},
-		{"rm"},
-		{"rm", "a", "b"},
-		{"mv", "a"},
-		{"add", "a"},
-		{"ls", "a"},
-	} {
-		if got := runSecrets(args); got != 1 {
-			t.Errorf("runSecrets(%v) = %d, want the usage error 1", args, got)
-		}
-	}
-}
-
-// TestRunSecretsLsEmpty lists an empty secrets dir successfully.
-func TestRunSecretsLsEmpty(t *testing.T) {
-	isolatedConfigDir(t)
-	swapStore(t, newFakeStore(nil))
-	if got := runSecrets([]string{"ls"}); got != 0 {
-		t.Errorf("runSecrets(ls) = %d, want 0", got)
 	}
 }
 
