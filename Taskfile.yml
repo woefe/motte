@@ -39,34 +39,37 @@ tasks:
   # the base image.
   build-images:
     desc: Build images locally and load them into the msb cache (name=base|golang|rails|web builds one variant)
+    cmds:
+      - task: build-base-image
+      - task: build-variants
+        if: '{{ ne .name "base" }}'
+
+  build-variants:
+    internal: true
     vars:
       PROFILES: '{{if .name}}{{.name}}{{else}}golang rails web{{end}}'
-    cmds:
-      - task: image-base
+    deps:
       - for:
           var: PROFILES
         task: image-variant
-        # image-base owns docker/base; never rebuild it here, or name=base
-        # would build the image twice.
-        if: '{{ ne .ITEM "base" }}'
         vars:
           VARIANT: "{{.ITEM}}"
 
-  # --pull refreshes the rolling archlinux:latest like CI's clean builder.
-  image-base:
+  build-base-image:
     internal: true
     vars:
       REF: ghcr.io/woefe/motte/base:latest
     cmds:
+      # --pull refreshes the rolling archlinux:latest like CI's clean builder.
       - podman build --pull -t {{.REF}} docker/base
       - podman save {{.REF}} | msb load
 
-  # No --pull here: the variant must build from the base task above, not the
-  # registry's, or a locally changed base would be ignored.
   image-variant:
     internal: true
     vars:
       REF: ghcr.io/woefe/motte/{{.VARIANT}}:latest
     cmds:
+      # No --pull here: the variant must build from the build-base-image task
+      # above, not the registry, or a locally changed base would be ignored.
       - podman build -t {{.REF}} docker/{{.VARIANT}}
       - podman save {{.REF}} | msb load
