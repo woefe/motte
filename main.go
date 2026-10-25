@@ -2,8 +2,8 @@
 //
 // Usage:
 //
-//	go run . <base|golang|rails|web> [--no-pull] [--replace]
-//	go run . secrets <add|set|configure|rm|ls|mv>
+//	motte <base|golang|rails|web> [--no-pull] [--replace]
+//	motte secrets <add|set|configure|rm|ls|mv>
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
 // The VM is named after the directory you launch from and is reused across
@@ -71,7 +71,7 @@ func run(args []string) int {
 	ctx := context.Background()
 
 	// Reuse the installed msb/libkrunfw pair or install the SDK's pinned
-	// runtime (to ~/.microsandbox), like the SDK docs' setup helper.
+	// runtime to ~/.microsandbox.
 	if _, err := m.EnsureRuntime(ctx, m.RuntimeConfig{}, m.InstallOptions{}); err != nil {
 		fmt.Fprintf(os.Stderr, "motte: ensuring the microsandbox runtime: %v\n", err)
 		return 1
@@ -89,12 +89,12 @@ func run(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "motte: sandbox %s\n", name)
 
-	// Bridge this terminal to the profile's cmd workload (the old
-	// `msb run -t`); blocks until the workload exits.
+	// Bridge this terminal to the profile's cmd workload; blocks until the
+	// workload exits.
 	code, attachErr := sandbox.AttachDefault(ctx)
 
 	// Stop always runs, even on attach errors; the named sandbox and its
-	// root disk persist for the README's one-offs.
+	// root disk persist across runs.
 	if err := sandbox.Stop(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "motte: failed to stop sandbox: %v\n", err)
 	}

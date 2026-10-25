@@ -5,25 +5,25 @@ Environments are isolated using [microsandbox](https://docs.microsandbox.dev) mi
 
 ## Prerequisites
 
-[Go](https://go.dev) 1.26 or newer to run the launcher.
-The launcher reuses an already-installed microsandbox runtime and otherwise downloads its pinned `msb`/`libkrunfw` pair to `~/.microsandbox` on first start.
+A `motte` binary (see [Releases](https://github.com/woefe/motte/releases), or build one yourself with [Go](https://go.dev) 1.26 or newer).
+Motte reuses an already-installed microsandbox runtime and otherwise downloads its pinned `msb`/`libkrunfw` pair to `~/.microsandbox` on first start.
 The microsandbox CLI (`msb`) itself is only needed for the one-offs below and for `task build-images`.
 Building images locally also needs `podman` and [Task](https://taskfile.dev).
 
 ## Usage
 
 ```sh
-go run . base     # base profile
-go run . golang   # golang profile
-go run . rails    # rails profile
-go run . web      # web profile
+motte base     # base profile
+motte golang   # golang profile
+motte rails    # rails profile
+motte web      # web profile
 ```
 
 This pulls the CI-built image, starts a microsandbox microVM, and launches the OpenCode TUI with the directory you launched motte from mounted read-write at `/workspace`.
 Each directory has its own VM, named after a hash of that directory; the launcher prints the name it uses.
 A directory's VM is reused across runs, so sessions and config on its root disk are kept; pass `--replace` to recreate the VM from scratch.
 Add `--no-pull` to skip the registry pull so a locally loaded image can win.
-The profiles are compiled into the launcher (see `profile.go`); a profile image or egress policy change therefore goes through a rebuild rather than a config edit.
+The profiles are compiled into the binary; a profile image or egress policy change therefore goes through a rebuild rather than a config edit.
 
 Useful one-offs (substitute the VM name the launcher printed):
 
@@ -58,11 +58,11 @@ Only `network.allow` is accepted; unknown keys or invalid entries fail the launc
 CI rebuilds all images every Monday 04:00 UTC and on pushes touching `docker/**`.
 Tags: `ghcr.io/woefe/motte/{base,golang,rails,web}:{latest,YYYY-MM-DD}` — pin a specific weekly build via the date tag; `latest` is the rolling tag.
 
-**adopting a new weekly image**: images rebuild on schedule; run `go run . <profile> --replace` to re-pull `:latest` and recreate the VM.
+**adopting a new weekly image**: images rebuild on schedule; run `motte <profile> --replace` to re-pull `:latest` and recreate the VM.
 
 **building locally**: `task build-images` builds all images and loads them into the msb cache under the same `latest` refs the profiles reference; `task build-images name=golang` builds the base plus one variant.
-Boot the local image with `go run . <profile> --no-pull --replace`.
-The local image shadows `latest` in the msb cache only until the next plain `go run . <profile>` re-pulls GHCR, which restores the CI image.
+Boot the local image with `motte <profile> --no-pull --replace`.
+The local image shadows `latest` in the msb cache only until the next plain `motte <profile>` re-pulls GHCR, which restores the CI image.
 
 ## Default OpenCode inference providers
 The default opencode config sets up a llama.cpp and OpenCode Go inference providers
@@ -81,12 +81,12 @@ The API key is injected via a **microsandbox secret** — the key's value never 
 Create the key at https://opencode.ai/console, then store it with:
 
 ```sh
-go run . secrets add
+motte secrets add
 ```
 
 Enter `OPENCODE_GO_KEY` as the secret name; the prompts then ask for the scope, the allowed hosts, and the value (input hidden).
 Allowed hosts default to `*.opencode.ai` for `OPENCODE_GO_KEY`.
-Finally, launch the sandbox with `go run . <profile>`.
+Finally, launch the sandbox with `motte <profile>`.
 
 ## Secrets
 
@@ -101,12 +101,12 @@ Secret names are path-like with scopes, mirroring `~/.config/motte/secrets` on d
 More specific configs shadow less specific ones by env var name, in project > profile > global precedence.
 
 ```sh
-go run . secrets add               # create a secret; prompts for name, scope, hosts, value
-go run . secrets set <name>        # (re)set the value; reads one line from stdin when piped
-go run . secrets configure <name>  # edit the secret's YAML in $VISUAL/$EDITOR (or nano/vi)
-go run . secrets rm <name> [-f]    # delete a secret's config and keychain value
-go run . secrets ls                # list secrets grouped by scope, with keychain presence
-go run . secrets mv <old> <new>    # rename; moves the config and re-keys the keychain value
+motte secrets add               # create a secret; prompts for name, scope, hosts, value
+motte secrets set <name>        # (re)set the value; reads one line from stdin when piped
+motte secrets configure <name>  # edit the secret's YAML in $VISUAL/$EDITOR (or nano/vi)
+motte secrets rm <name> [-f]    # delete a secret's config and keychain value
+motte secrets ls                # list secrets grouped by scope, with keychain presence
+motte secrets mv <old> <new>    # rename; moves the config and re-keys the keychain value
 ```
 
 A launch fails when a configured secret has no keychain value, with a hint to run `motte secrets set <name>`.

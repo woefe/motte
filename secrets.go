@@ -40,7 +40,8 @@ const (
 // defaultSecretHeaderFields is used when a secret config omits them.
 var defaultSecretHeaderFields = []string{"authorization"}
 
-// opencodeSecretName is the formerly built-in secret, named in hints.
+// opencodeSecretName is the secret motte hints at and migrates from older
+// sandboxes.
 const opencodeSecretName = "OPENCODE_GO_KEY"
 
 // errSecretNotFound reports a missing keychain entry.
@@ -587,8 +588,8 @@ func (h *hostPatternValue) UnmarshalJSON(data []byte) error {
 
 // secretDrift compares the secrets stored in a sandbox config against the
 // desired set (both keyed by env var name). It returns the desired secrets to
-// upsert, stored secrets to remove, and the upserts that migrate a formerly
-// stored raw (plaintext) value to a keychain-backed env reference.
+// upsert, stored secrets to remove, and the upserts that replace a stored raw
+// (plaintext) value with a keychain-backed env reference.
 func secretDrift(stored []storedSecret, desired []secretSpec) (upsert []secretSpec, remove, migrated []string) {
 	want := make(map[string]secretSpec, len(desired))
 	for _, spec := range desired {

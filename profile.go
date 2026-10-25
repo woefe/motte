@@ -1,9 +1,9 @@
 // Built-in profiles, compiled into the binary.
 //
 // base() carries the settings every profile shares; the profile constructors
-// overlay it, mirroring the old `--conf` overlay semantics field by field. The network allow entries
-// keep the microsandbox CLI rule-target grammar (see sdk.go); the SDK options
-// built from them behave like the CLI's.
+// overlay it field by field. The network allow entries keep the microsandbox
+// CLI rule-target grammar (see sdk.go); the SDK options built from them
+// behave like the CLI's.
 package main
 
 import (
@@ -118,7 +118,7 @@ func (p *profile) resolve(cwd string) error {
 	return nil
 }
 
-// baseAllow is the egress policy every profile shares
+// baseAllow is the egress policy every profile shares.
 var baseAllow = []string{
 	"dns",
 	"*.github.com",

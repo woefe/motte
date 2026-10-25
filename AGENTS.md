@@ -11,9 +11,12 @@ Motte provides profiles for isolated development environments for agentic develo
 
 ## Project layout
 - docker: docker images for the various development environments; build them locally with `task build-images`
-- motte launcher. `go run . profile [--no-pull]` starts a profile in an isolated microsandbox VM via the Go SDK
+- motte launcher. `motte <profile> [--no-pull] [--replace]` starts a profile in an isolated microsandbox VM via the Go SDK; `motte secrets <add|set|configure|rm|ls|mv>` manages keychain-backed secrets
 - built-in profiles are defined as Go structs in `profile.go` (compiled into the binary)
 
 ## Project constraints
 - Write markdown `.md` files one sentence per line
 - Run `task lint` to lint, test, and verify changes
+- Use code comments sparsely. Comments should never describe old behavior, but only the current behavior.
+- If you have to explain too many details and cross references in comments think of a better design
+- The README must stay well readable for human end-users: prefer the `motte` binary in examples, and avoid technical internals such as source file references or build details

@@ -8,6 +8,8 @@ linters:
   default: standard
   enable:
     - misspell
+    - godot
+    - gocritic
 
 formatters:
   enable:
