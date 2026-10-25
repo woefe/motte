@@ -223,7 +223,7 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	for name, image := range builtinImages() {
 		t.Run(name, func(t *testing.T) {
 			isolatedConfigDir(t)
-			profile, err := loadProfile(name, fixtureEnv)
+			profile, err := loadProfile(name)
 			if err != nil {
 				t.Fatalf("loadProfile: %v", err)
 			}
@@ -288,18 +288,11 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 				t.Error("Network.TLS not enabled")
 			}
 
-			if len(config.Secrets) != 1 {
-				t.Fatalf("Secrets = %+v, want 1", config.Secrets)
-			}
-			secret := config.Secrets[0]
-			if secret.EnvVar != "OPENCODE_GO_KEY" || secret.Value != "sk_test" {
-				t.Errorf("secret = %q/%q", secret.EnvVar, secret.Value)
-			}
-			if len(secret.Allow) != 1 || secret.Allow[0] != "*.opencode.ai" {
-				t.Errorf("secret.Allow = %v", secret.Allow)
-			}
-			if len(secret.Substitution.HeaderFields) != 2 || secret.Substitution.HeaderFields[0] != "authorization" {
-				t.Errorf("header fields = %v", secret.Substitution.HeaderFields)
+			// Secrets are never part of create options: values would persist
+			// plaintext in the durable sandbox config on the host. They are
+			// applied as post-create modify entries instead (see main.go).
+			if len(config.Secrets) != 0 {
+				t.Fatalf("Secrets = %+v, want none", config.Secrets)
 			}
 		})
 	}
@@ -307,7 +300,7 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
 	isolatedConfigDir(t)
-	profile, err := loadProfile("golang", fixtureEnv)
+	profile, err := loadProfile("golang")
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}

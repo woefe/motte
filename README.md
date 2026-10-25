@@ -5,7 +5,7 @@ Environments are isolated using [microsandbox](https://docs.microsandbox.dev) mi
 
 ## Prerequisites
 
-[Go](https://go.dev) 1.22 or newer to run the launcher.
+[Go](https://go.dev) 1.26 or newer to run the launcher.
 The launcher reuses an already-installed microsandbox runtime and otherwise downloads its pinned `msb`/`libkrunfw` pair to `~/.microsandbox` on first start.
 The microsandbox CLI (`msb`) itself is only needed for the one-offs below and for `task build-images`.
 Building images locally also needs `podman` and [Task](https://taskfile.dev).
@@ -75,15 +75,45 @@ llama-server -m ./model.gguf --host 0.0.0.0 --port 9931
 ```
 
 ### OpenCode Go
-The API key is injected with a **microsandbox secret** — it never enters the VM:
+The API key is injected via a **microsandbox secret** — the key's value never enters the VM, and it is never stored in plain by motte or microsandbox on the host.
+Create the key at https://opencode.ai/console, then store it with:
 
-1. Create the key at https://opencode.ai/console
-2. Export it in the host environment before launching:
+```sh
+go run . secrets add
+```
 
-   ```sh
-   export OPENCODE_GO_KEY="sk_..."   # the launcher refuses to start without it
-   ```
+Enter `OPENCODE_GO_KEY` as the secret name; the prompts then ask for the scope, the allowed hosts, and the value (input hidden).
+Allowed hosts default to `*.opencode.ai` for `OPENCODE_GO_KEY`.
+Finally, launch the sandbox with `go run . <profile>`.
 
-3. launch the sandbox with `go run . <profile>`
+## Secrets
 
-The alternative is the interactive `/connect` flow inside the TUI (credential stored in the sandbox's own root disk); the secret is preferred here because it keeps the key on the host.
+Secret values live in the OS keychain, while motte's YAML configs and microsandbox's durable sandbox configs on the host only carry references.
+Secret names are path-like with scopes, mirroring `~/.config/motte/secrets` on disk:
+
+- `OPENCODE_GO_KEY` — global, injected into every profile's VM
+- `golang/OPENCODE_GO_KEY` — profile-scoped, injected only into golang VMs
+- `golang/<dir-hash>/OPENCODE_GO_KEY` — project scope, injected only in this directory's golang VMs
+
+`motte secrets ls` prints the project hash of the current directory.
+More specific configs shadow less specific ones by env var name, in project > profile > global precedence.
+
+```sh
+go run . secrets add               # create a secret; prompts for name, scope, hosts, value
+go run . secrets set <name>        # (re)set the value; reads one line from stdin when piped
+go run . secrets configure <name>  # edit the secret's YAML in $VISUAL/$EDITOR (or nano/vi)
+go run . secrets rm <name> [-f]    # delete a secret's config and keychain value
+go run . secrets ls                # list secrets grouped by scope, with keychain presence
+go run . secrets mv <old> <new>    # rename; moves the config and re-keys the keychain value
+```
+
+A launch fails when a configured secret has no keychain value, with a hint to run `motte secrets set <name>`.
+Launching with no secrets configured at all prints a hint to `motte secrets add OPENCODE_GO_KEY` instead.
+The secrets' allowed hosts automatically extend the profile's egress allow list.
+On the first launch after updating, existing VMs get their formerly built-in inline secret migrated to a keychain-backed reference, replacing the stored plaintext copy — a notice is printed.
+
+Linux needs a Secret Service provider (gnome-keyring/KWallet, usually preinstalled on desktop environments); on headless setups or WSL without one, the launch fails when reading the keychain.
+Keychain value sizes are limited (~4 KiB on macOS, ~2560 bytes on Windows Credential Manager), which `motte secrets add` and `set` warn about.
+Values are never accepted as command-line arguments, since argv can be world-readable via `/proc`.
+
+The alternative is the interactive `/connect` flow inside the TUI (credential stored in the sandbox's own root disk); the secret is preferred here because it keeps the key on the host — in the OS keychain, not in any host config.

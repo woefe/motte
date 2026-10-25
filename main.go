@@ -3,19 +3,24 @@
 // Usage:
 //
 //	go run . <golang|web> [--no-pull] [--replace]
+//	go run . secrets <add|set|configure|rm|ls|mv>
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
 // The VM is named after the directory you launch from and is reused across
-// runs; --replace recreates it instead. Behaviour and one-offs: see the README.
+// runs; --replace recreates it instead. Secrets are managed with the secrets
+// subcommand and stored in the OS keychain. Behaviour and one-offs: see the
+// README.
 package main
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
@@ -25,15 +30,19 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run launches the profile sandbox and returns the workload's exit code.
+// run launches the profile sandbox or dispatches the secrets subcommand and
+// returns the workload's exit code.
 func run(args []string) int {
+	if len(args) > 0 && args[0] == "secrets" {
+		return runSecrets(args[1:])
+	}
 	profileName, noPull, replace, err := parseArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 
-	profile, err := loadProfile(profileName, os.Getenv)
+	profile, err := loadProfile(profileName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
 		return 1
@@ -42,6 +51,16 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "motte: profile %s has no cmd to attach to\n", profileName)
 		return 1
 	}
+
+	// Resolve the effective secrets from the OS keychain and feed them to the
+	// runtime via host env vars; the env vars are only needed until the
+	// sandbox booted.
+	secrets, err := resolveSecrets(profile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
+		return 1
+	}
+	defer unsetSecretEnv(secrets)
 
 	opts, err := sandboxOptions(profile, noPull)
 	if err != nil {
@@ -63,7 +82,7 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
 		return 1
 	}
-	sandbox, err := openSandbox(ctx, name, opts, replace)
+	sandbox, err := openSandbox(ctx, name, opts, replace, secrets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
 		return 1
@@ -143,13 +162,31 @@ func sandboxName(profileName string) (string, error) {
 
 // openSandbox returns a live sandbox for name. With replace set it recreates
 // the VM; otherwise it reuses this directory's persisted VM when one exists and
-// creates it (streaming pull/boot progress) only when none does yet.
-func openSandbox(ctx context.Context, name string, opts []m.SandboxOption, replace bool) (*m.Sandbox, error) {
+// creates it (streaming pull/boot progress) only when none does yet. The
+// effective secrets are converged onto the sandbox config after create and on
+// every reuse, so drifted or migrated secrets are fixed per launch.
+func openSandbox(
+	ctx context.Context,
+	name string,
+	opts []m.SandboxOption,
+	replace bool,
+	secrets []secretSpec,
+) (*m.Sandbox, error) {
 	if replace {
-		return createSandbox(ctx, name, append(append([]m.SandboxOption{}, opts...), m.WithReplace()))
+		sandbox, err := createSandbox(ctx, name, append(append([]m.SandboxOption{}, opts...), m.WithReplace()))
+		if err != nil {
+			return nil, err
+		}
+		if err := convergeAfterCreate(ctx, sandbox, secrets); err != nil {
+			return nil, err
+		}
+		return sandbox, nil
 	}
 	handle, err := m.GetSandbox(ctx, name)
 	if err == nil {
+		if err := convergeOnReuse(ctx, name, handle, secrets); err != nil {
+			return nil, err
+		}
 		return handle.ConnectOrStart(ctx)
 	}
 	if !m.IsKind(err, m.ErrSandboxNotFound) {
@@ -157,13 +194,153 @@ func openSandbox(ctx context.Context, name string, opts []m.SandboxOption, repla
 	}
 	sandbox, createErr := createSandbox(ctx, name, opts)
 	if createErr == nil {
+		if err := convergeAfterCreate(ctx, sandbox, secrets); err != nil {
+			return nil, err
+		}
 		return sandbox, nil
 	}
 	if m.IsKind(createErr, m.ErrSandboxAlreadyExists) {
 		// A concurrent launch created it first; converge on that VM.
-		return m.ConnectOrCreateSandbox(ctx, name, opts...)
+		handle, handleErr := m.GetSandbox(ctx, name)
+		if handleErr != nil {
+			return nil, createErr
+		}
+		if err := convergeOnReuse(ctx, name, handle, secrets); err != nil {
+			return nil, err
+		}
+		return handle.ConnectOrStart(ctx)
 	}
 	return nil, createErr
+}
+
+// secretModder is the modify subset shared by Sandbox and SandboxHandle.
+type secretModder interface {
+	Modify(ctx context.Context, opts m.ModifyOptions) (*m.SandboxModificationPlan, error)
+}
+
+// convergeAfterCreate applies secrets to a freshly created sandbox. The VM
+// booted without them, so the restart policy reboots it with the secrets in
+// place. The stored config of a fresh sandbox carries no secrets yet.
+func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, secrets []secretSpec) error {
+	if len(secrets) == 0 {
+		return nil
+	}
+	plan, err := modifySecrets(ctx, sandbox, sandbox.Name(), nil, secrets, m.ModificationPolicyRestart)
+	if err != nil {
+		return err
+	}
+	reportModifications(plan, sandbox.Name())
+	return nil
+}
+
+// convergeOnReuse diffs the stored sandbox config against the desired secrets
+// and fixes drift: a stopped VM gets the persisted patch applied for its next
+// start; a running VM gets a note instead (its restart is left to the user).
+func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, secrets []secretSpec) error {
+	stored, err := parseStoredSecrets(handle.ConfigJSON())
+	if err != nil {
+		return fmt.Errorf("sandbox %s: %w", name, err)
+	}
+	if handle.Status() == m.SandboxStatusRunning {
+		plan, err := modifySecrets(ctx, handle, name, stored, secrets, m.ModificationPolicyNextStart)
+		if err != nil {
+			return err
+		}
+		if plan != nil {
+			fmt.Fprintf(os.Stderr,
+				"motte: sandbox %s is running; secret changes apply on its next start\n", name)
+		}
+		return nil
+	}
+	if _, err := modifySecrets(ctx, handle, name, stored, secrets, m.ModificationPolicyNextStart); err != nil {
+		return err
+	}
+	return nil
+}
+
+// modifySecrets builds and applies the convergence patch from the drift
+// between stored and desired secrets; it is a no-op without drift.
+func modifySecrets(ctx context.Context, modder secretModder, name string, stored []storedSecret,
+	secrets []secretSpec, policy m.ModificationPolicy,
+) (*m.SandboxModificationPlan, error) {
+	upsert, remove, migrated := secretDrift(stored, secrets)
+	if len(upsert) == 0 && len(remove) == 0 {
+		return nil, nil
+	}
+	for _, envVar := range migrated {
+		fmt.Fprintf(os.Stderr,
+			"motte: migrating secret %s: the stored plaintext copy is replaced by a keychain-backed env reference\n",
+			envVar)
+	}
+	if slices.Contains(remove, opencodeSecretName) {
+		fmt.Fprintf(
+			os.Stderr,
+			"motte: removing the formerly built-in secret %s from sandbox %s; re-enable it with: motte secrets add %s\n",
+			opencodeSecretName,
+			name,
+			opencodeSecretName,
+		)
+	}
+	plan, err := modder.Modify(ctx, m.ModifyOptions{
+		Secrets:       secretModifySpecs(upsert),
+		SecretsRemove: remove,
+		Policy:        policy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("applying secrets to sandbox %s: %w", name, err)
+	}
+	return plan, nil
+}
+
+// reportModifications prints a one-line summary of an applied plan.
+func reportModifications(plan *m.SandboxModificationPlan, name string) {
+	if plan == nil || len(plan.Changes) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "motte: sandbox %s reboots to apply %d secret change(s)\n", name, len(plan.Changes))
+}
+
+// resolveSecrets returns the effective secret set for a launch: scanned from
+// the user's secret configs with precedence applied, validated, egress
+// extended with their allow entries, and values pulled from the keychain into
+// host env vars for the sandbox boot.
+func resolveSecrets(p *profile) ([]secretSpec, error) {
+	configured, err := scanEffectiveSecrets(p.name)
+	if err != nil {
+		return nil, err
+	}
+	if count, err := secretCountAll(); err == nil && count == 0 {
+		fmt.Fprintf(os.Stderr,
+			"motte: no secrets configured; to store a key for OpenCode in the OS keychain run: motte secrets add %s\n",
+			opencodeSecretName)
+	}
+	var egress []string
+	for _, secret := range configured {
+		egress = append(egress, secret.allow...)
+	}
+	p.extendAllow(egress)
+	for _, secret := range configured {
+		value, err := defaultSecretStore.get(secret.name)
+		if errors.Is(err, errSecretNotFound) {
+			return nil, fmt.Errorf(
+				"secret %s is not in the keychain — set it with: motte secrets set %s",
+				secret.name, secret.name)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Setenv(secretHostEnvVar(secret.envVar), value); err != nil {
+			return nil, fmt.Errorf("exporting %s: %w", secretHostEnvVar(secret.envVar), err)
+		}
+	}
+	return configured, nil
+}
+
+// unsetSecretEnv clears the host env vars secrets resolve through.
+func unsetSecretEnv(secrets []secretSpec) {
+	for _, secret := range secrets {
+		_ = os.Unsetenv(secretHostEnvVar(secret.envVar))
+	}
 }
 
 // createSandbox boots a new sandbox, streaming creation progress to stderr.

@@ -36,7 +36,7 @@ func TestUserAllowExtendsAndDedups(t *testing.T) {
     - "*.github.com"
     - "one.more.example.com"
 `)
-	profile, err := loadProfile("golang", fixtureEnv)
+	profile, err := loadProfile("golang")
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}
@@ -73,7 +73,7 @@ func countEntries(allow []string, entry string) int {
 func TestUserAllowAbsentAndEmptyNoOps(t *testing.T) {
 	isolatedConfigDir(t)
 	writeUserConfig(t, "web.yaml", "")
-	profile, err := loadProfile("web", fixtureEnv)
+	profile, err := loadProfile("web")
 	if err != nil {
 		t.Fatalf("loadProfile with an empty file: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestUserAllowAbsentAndEmptyNoOps(t *testing.T) {
 	writeUserConfig(t, "web.yaml", `network:
   allow: []
 `)
-	profile, err = loadProfile("web", fixtureEnv)
+	profile, err = loadProfile("web")
 	if err != nil {
 		t.Fatalf("loadProfile with an empty allow list: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestUserAllowRejectsUnknownFields(t *testing.T) {
   alow:
     - "extra.example.com"
 `)
-	_, err := loadProfile("web", fixtureEnv)
+	_, err := loadProfile("web")
 	if err == nil || !strings.Contains(err.Error(), "user config") || !strings.Contains(err.Error(), "alow") {
 		t.Fatalf("error = %v, want an unknown-field error naming the file and `alow`", err)
 	}
@@ -119,7 +119,7 @@ func TestUserAllowRejectsUnknownFields(t *testing.T) {
   tls:
     enabled: false
 `)
-	_, err = loadProfile("golang", fixtureEnv)
+	_, err = loadProfile("golang")
 	if err == nil || !strings.Contains(err.Error(), "user config") || !strings.Contains(err.Error(), "tls") {
 		t.Fatalf("error = %v, want an unknown-field error naming the file and `tls`", err)
 	}
@@ -134,7 +134,7 @@ func TestUserAllowRejectsBadRuleEntries(t *testing.T) {
     - "*.github.com"
     - "webserver"
 `)
-	_, err := loadProfile("golang", fixtureEnv)
+	_, err := loadProfile("golang")
 	if err == nil || !strings.Contains(err.Error(), "user config") || !strings.Contains(err.Error(), "webserver") {
 		t.Fatalf("error = %v, want a bad-rule error naming the file and `webserver`", err)
 	}

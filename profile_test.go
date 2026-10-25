@@ -18,14 +18,6 @@ func workingDir(t *testing.T) string {
 	return wd
 }
 
-// fixtureEnv returns getenv returning sk_test for the declared secret.
-func fixtureEnv(envVar string) string {
-	if envVar == "OPENCODE_GO_KEY" {
-		return "sk_test"
-	}
-	return ""
-}
-
 // isolatedConfigDir points XDG_CONFIG_HOME at a fresh temp dir so tests never
 // read a real ~/.config/motte.
 func isolatedConfigDir(t *testing.T) {
@@ -42,14 +34,14 @@ func builtinImages() map[string]string {
 }
 
 // TestBuiltinProfilesLoad loads every built-in profile and checks the shared
-// base plus the launch-time resolution: cwd-relative mounts, env-fed secrets,
-// and the static sanity of the definitions.
+// base plus the launch-time resolution: cwd-relative mounts and the static
+// sanity of the definitions.
 func TestBuiltinProfilesLoad(t *testing.T) {
 	isolatedConfigDir(t)
 	images := builtinImages()
 	for name, image := range images {
 		t.Run(name, func(t *testing.T) {
-			profile, err := loadProfile(name, fixtureEnv)
+			profile, err := loadProfile(name)
 			if err != nil {
 				t.Fatalf("loadProfile(%s): %v", name, err)
 			}
@@ -130,20 +122,8 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 				seen[entry] = true
 			}
 
-			// The secret resolves from the host environment.
-			if len(profile.secrets) != 1 {
-				t.Fatalf("secrets = %+v, want 1", profile.secrets)
-			}
-			secret := profile.secrets[0]
-			if secret.envVar != "OPENCODE_GO_KEY" || secret.value != "sk_test" {
-				t.Errorf("secret = %q %q", secret.envVar, secret.value)
-			}
-			if len(secret.allow) != 1 || secret.allow[0] != "*.opencode.ai" {
-				t.Errorf("secret.allow = %v", secret.allow)
-			}
-			if len(secret.headerFields) != 2 || secret.headerFields[0] != "authorization" {
-				t.Errorf("headerFields = %v", secret.headerFields)
-			}
+			// Secrets are user-configured for the OS keychain, not part of
+			// the built-in profile; covered in secrets_test.go.
 		})
 	}
 }
@@ -162,18 +142,9 @@ func assertAllowListed(t *testing.T, allow []string, targets ...string) {
 // TestLoadProfileUnknownProfile rejects a profile the binary does not ship.
 func TestLoadProfileUnknownProfile(t *testing.T) {
 	isolatedConfigDir(t)
-	_, err := loadProfile("rails", fixtureEnv)
+	_, err := loadProfile("rails")
 	if err == nil || !strings.Contains(err.Error(), "unknown profile") ||
 		!strings.Contains(err.Error(), "golang, web") {
 		t.Fatalf("loadProfile(rails) error = %v, want an unknown-profile error listing golang, web", err)
-	}
-}
-
-// TestLoadProfileRequiresSecretValue fails without the host env var set.
-func TestLoadProfileRequiresSecretValue(t *testing.T) {
-	isolatedConfigDir(t)
-	_, err := loadProfile("golang", func(string) string { return "" })
-	if err == nil || !strings.Contains(err.Error(), "OPENCODE_GO_KEY") {
-		t.Fatalf("error = %v, want a missing-env error naming OPENCODE_GO_KEY", err)
 	}
 }

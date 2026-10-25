@@ -15,8 +15,9 @@ import (
 )
 
 // profile is one resolved profile: a built-in definition with the mount
-// sources resolved against the directory motte was started in and secret
-// values read from the host environment.
+// sources resolved against the directory motte was started in. Secrets are
+// not part of the profile; they come from the user's secret configs and the
+// OS keychain (see secrets.go).
 type profile struct {
 	name      string
 	image     string
@@ -28,7 +29,6 @@ type profile struct {
 	cmd       []string
 	scripts   map[string]string
 	network   *networkDoc
-	secrets   []secretSpec
 }
 
 // networkDoc is the network configuration: an allow list in the CLI rule
@@ -56,14 +56,8 @@ type mountSpec struct {
 	nodev     bool
 }
 
-// secretSpec is one secret declaration. The value comes from the host
-// environment variable envVar at launch.
-type secretSpec struct {
-	envVar       string
-	value        string
-	allow        []string
-	headerFields []string
-}
+// secretSpec is defined in secrets.go: one user-configured secret with its
+// keychain-backed value, allow list, and header fields.
 
 // builtins lists the profiles compiled into the binary.
 var builtins = map[string]func() *profile{
@@ -72,9 +66,8 @@ var builtins = map[string]func() *profile{
 }
 
 // loadProfile returns the built-in profile name with the launch-time parts
-// resolved: relative mount sources joined against the working directory and
-// secret values read from getenv.
-func loadProfile(name string, getenv func(string) string) (*profile, error) {
+// resolved: relative mount sources joined against the working directory.
+func loadProfile(name string) (*profile, error) {
 	build, ok := builtins[name]
 	if !ok {
 		names := availableProfiles()
@@ -90,7 +83,7 @@ func loadProfile(name string, getenv func(string) string) (*profile, error) {
 		return nil, err
 	}
 	p.extendAllow(extra)
-	if err := p.resolve(cwd, getenv); err != nil {
+	if err := p.resolve(cwd); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -107,9 +100,8 @@ func availableProfiles() []string {
 }
 
 // resolve fills the launch-time parts of the profile: it joins relative mount
-// sources with cwd, and reads each secret's value from getenv. It rejects
-// duplicate guest mount targets and secrets without a value.
-func (p *profile) resolve(cwd string, getenv func(string) string) error {
+// sources with cwd. It rejects duplicate guest mount targets.
+func (p *profile) resolve(cwd string) error {
 	seen := make(map[string]bool, len(p.mounts))
 	for i := range p.mounts {
 		mount := &p.mounts[i]
@@ -120,17 +112,6 @@ func (p *profile) resolve(cwd string, getenv func(string) string) error {
 			return fmt.Errorf("duplicate guest mount target %s", mount.guestPath)
 		}
 		seen[mount.guestPath] = true
-	}
-	for i := range p.secrets {
-		secret := &p.secrets[i]
-		value := getenv(secret.envVar)
-		if value == "" {
-			return fmt.Errorf("set %s in the host environment for the %s profile", secret.envVar, p.name)
-		}
-		if len(secret.allow) == 0 {
-			return fmt.Errorf("secret %s: allow list is empty; at least one host is required", secret.envVar)
-		}
-		secret.value = value
 	}
 	return nil
 }
@@ -162,7 +143,8 @@ var baseAllow = []string{
 
 // base returns the settings every profile shares: resources, the workspace
 // mount, the base egress policy extended by every profile, TLS interception,
-// the OpenCode Go secret, the connectivity check and the default cmd.
+// the connectivity check and the default cmd. Secrets are user-configured
+// only (see secrets.go).
 func base() *profile {
 	p := &profile{
 		cpus:      ptr(uint8(4)),
@@ -177,12 +159,6 @@ func base() *profile {
 			"check": "opencode --version && curl -sf http://host.microsandbox.internal:9931/health && echo 'llama server reachable'",
 		},
 		network: &networkDoc{TLS: &tlsDoc{Enabled: ptr(true)}},
-		secrets: []secretSpec{{
-			// OpenCode Go token read from the host env at sandbox start.
-			envVar:       "OPENCODE_GO_KEY",
-			allow:        []string{"*.opencode.ai"},
-			headerFields: []string{"authorization", "x-api-key"},
-		}},
 	}
 	p.extendAllow(baseAllow)
 	return p

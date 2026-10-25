@@ -63,22 +63,29 @@ func sandboxOptions(p *profile, noPull bool) ([]m.SandboxOption, error) {
 		}
 		opts = append(opts, m.WithNetwork(network))
 	}
-	if len(p.secrets) > 0 {
-		entries := make([]m.SecretEntry, 0, len(p.secrets))
-		for _, secret := range p.secrets {
-			entries = append(entries, m.Secret.Env(secret.envVar, secret.value, m.SecretEnvOptions{
-				Allow: secret.allow,
-				Substitution: m.SecretSubstitution{
-					HeaderFields: secret.headerFields,
-				},
-			}))
-		}
-		opts = append(opts, m.WithSecrets(entries...))
-	}
+	// Secrets are deliberately absent here: create-time raw values persist
+	// plaintext in the durable sandbox config on the host. Secrets are
+	// applied after creation instead, as env-source modify entries — see
+	// applySecrets in main.go and secretModifySpecs below.
 	if !noPull {
 		opts = append(opts, m.WithPullPolicy(m.PullPolicyAlways))
 	}
 	return opts, nil
+}
+
+// secretModifySpecs translates resolved secrets into modify entries keyed by
+// env var name. Values are provided as host env references (MOTTE_SECRET_*),
+// so the durable sandbox config stores no secret material.
+func secretModifySpecs(secrets []secretSpec) map[string]m.SecretModifySpec {
+	specs := make(map[string]m.SecretModifySpec, len(secrets))
+	for _, secret := range secrets {
+		specs[secret.envVar] = m.SecretModifySpec{
+			Env:          secretHostEnvVar(secret.envVar),
+			AllowedHosts: secret.allow,
+			Substitution: &m.SecretSubstitution{HeaderFields: secret.headerFields},
+		}
+	}
+	return specs
 }
 
 // networkConfig translates the merged network section.
