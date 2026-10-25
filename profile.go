@@ -80,7 +80,7 @@ func loadProfile(name string) (*profile, error) {
 		return nil, fmt.Errorf("resolving the working directory: %w", err)
 	}
 	p := build()
-	extra, err := userAllow(name)
+	extra, err := policyAllow(name)
 	if err != nil {
 		return nil, err
 	}

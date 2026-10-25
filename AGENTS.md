@@ -11,8 +11,9 @@ Motte provides profiles for isolated development environments for agentic develo
 
 ## Project layout
 - docker: docker images for the various development environments; build them locally with `task build-images`
-- motte launcher. `motte <profile> [--no-pull] [--replace]` starts a profile in an isolated microsandbox VM via the Go SDK; `motte secrets <add|set|configure|rm|ls|mv>` manages keychain-backed secrets
+- motte launcher. `motte opencode|oc <profile> [--no-pull] [--replace]` starts a profile in an isolated microsandbox VM via the Go SDK; `motte policies <ls|configure>` manages the user network policies; `motte secrets <add|set|configure|rm|ls|mv>` manages keychain-backed secrets
 - built-in profiles are defined as Go structs in `profile.go` (compiled into the binary)
+- the CLI is built with `cobra`; user policies and secrets live in scope files under `$XDG_CONFIG_HOME/motte/{policies,secrets}`
 
 ## Project constraints
 - Write markdown `.md` files one sentence per line

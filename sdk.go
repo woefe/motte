@@ -25,6 +25,9 @@ import (
 func sandboxOptions(p *profile, noPull bool) ([]m.SandboxOption, error) {
 	opts := []m.SandboxOption{
 		m.WithImage(p.image),
+		// The fingerprint of the effective network policy, so a reused VM
+		// can be told that its policy is no longer the current one.
+		m.WithLabels(map[string]string{policyLabelKey: policyFingerprint(p)}),
 	}
 	if p.cpus != nil {
 		opts = append(opts, m.WithCPUs(*p.cpus))

@@ -2,7 +2,9 @@
 //
 // Usage:
 //
-//	motte <base|golang|rails|web> [--no-pull] [--replace]
+//	motte opencode <base|golang|rails|web> [--no-pull] [--replace]
+//	motte policies ls
+//	motte policies configure <scope>
 //	motte secrets <add|set|configure|rm|ls|mv>
 //
 // --no-pull skips the registry pull so a locally loaded image can win.
@@ -27,29 +29,43 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	os.Exit(run(os.Args))
 }
 
-// run launches the profile sandbox or dispatches the secrets subcommand and
-// returns the workload's exit code.
-func run(args []string) int {
-	if len(args) > 0 && args[0] == "secrets" {
-		return runSecrets(args[1:])
-	}
-	profileName, noPull, replace, err := parseArgs(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
-	}
+// boot runs the profile's sandbox and returns the workload's exit code.
+// The command tree replaces it in tests.
+var boot = bootProfile
 
+// run dispatches the command tree and returns the exit code.
+func run(args []string) int {
+	root := newRootCommand()
+	root.SetArgs(args[1:])
+	root.SetOut(os.Stdout)
+	root.SetErr(os.Stderr)
+	err := root.Execute()
+	if err == nil {
+		return 0
+	}
+	var coded exitCoder
+	if errors.As(err, &coded) {
+		if coded.message != "" {
+			fmt.Fprintf(os.Stderr, "motte: %s\n", coded.message)
+		}
+		return coded.ExitCode()
+	}
+	fmt.Fprintf(os.Stderr, "motte: %v\n", err)
+	return 1
+}
+
+// bootProfile launches the profile sandbox and returns the workload's exit
+// code.
+func bootProfile(profileName string, noPull, replace bool) (int, error) {
 	profile, err := loadProfile(profileName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
-		return 1
+		return 1, err
 	}
 	if len(profile.cmd) == 0 {
-		fmt.Fprintf(os.Stderr, "motte: profile %s has no cmd to attach to\n", profileName)
-		return 1
+		return 1, fmt.Errorf("profile %s has no cmd to attach to", profileName)
 	}
 
 	// Resolve the effective secrets from the OS keychain and feed them to the
@@ -57,15 +73,13 @@ func run(args []string) int {
 	// sandbox booted.
 	secrets, err := resolveSecrets(profile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
-		return 1
+		return 1, err
 	}
 	defer unsetSecretEnv(secrets)
 
 	opts, err := sandboxOptions(profile, noPull)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
-		return 1
+		return 1, err
 	}
 
 	ctx := context.Background()
@@ -73,19 +87,18 @@ func run(args []string) int {
 	// Reuse the installed msb/libkrunfw pair or install the SDK's pinned
 	// runtime to ~/.microsandbox.
 	if _, err := m.EnsureRuntime(ctx, m.RuntimeConfig{}, m.InstallOptions{}); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: ensuring the microsandbox runtime: %v\n", err)
-		return 1
+		return 1, fmt.Errorf("ensuring the microsandbox runtime: %w", err)
 	}
 
 	name, err := sandboxName(profileName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
-		return 1
+		return 1, err
 	}
-	sandbox, err := openSandbox(ctx, name, opts, replace, secrets)
+	fingerprint := policyFingerprint(profile)
+	state := launchState{secrets: secrets, policyFingerprint: fingerprint}
+	sandbox, err := openSandbox(ctx, name, opts, replace, state)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %v\n", err)
-		return 1
+		return 1, err
 	}
 	fmt.Fprintf(os.Stderr, "motte: sandbox %s\n", name)
 
@@ -102,45 +115,9 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "motte: closing sandbox handle: %v\n", err)
 	}
 	if attachErr != nil {
-		fmt.Fprintf(os.Stderr, "motte: attaching to %s: %v\n", name, attachErr)
-		return 1
+		return 1, fmt.Errorf("attaching to %s: %w", name, attachErr)
 	}
-	return code
-}
-
-// parseArgs takes a built-in profile name and/or --no-pull and --replace in
-// any order. It fails when no profile is given and on anything else.
-func parseArgs(args []string) (profile string, noPull, replace bool, err error) {
-	set := false
-	for _, arg := range args {
-		// Every built-in profile name is a valid value; anything else must be
-		// a flag.
-		if _, ok := builtins[arg]; ok {
-			profile = arg
-			set = true
-			continue
-		}
-		switch arg {
-		case "--no-pull":
-			noPull = true
-		case "--replace":
-			replace = true
-		default:
-			return "", false, false, fmt.Errorf(
-				"unknown argument: %s (expected %s, --no-pull, or --replace)", arg, choices(),
-			)
-		}
-	}
-	if !set {
-		return "", false, false, fmt.Errorf("no profile given (expected one of %s)", choices())
-	}
-	return profile, noPull, replace, nil
-}
-
-// choices names the built-in profiles for the usage errors: a pipe-joined,
-// sorted list.
-func choices() string {
-	return strings.Join(availableProfiles(), "|")
+	return code, nil
 }
 
 // dirHash returns a short hash of the resolved current working directory, so
@@ -170,6 +147,13 @@ func sandboxName(profileName string) (string, error) {
 	return hash + "-motte-" + profileName, nil
 }
 
+// launchState is the desired state of a launch: the resolved secrets and the
+// fingerprint of the effective network policy.
+type launchState struct {
+	secrets           []secretSpec
+	policyFingerprint string
+}
+
 // openSandbox returns a live sandbox for name. With replace set it recreates
 // the VM; otherwise it reuses this directory's persisted VM when one exists and
 // creates it (streaming pull/boot progress) only when none does yet. The
@@ -180,21 +164,21 @@ func openSandbox(
 	name string,
 	opts []m.SandboxOption,
 	replace bool,
-	secrets []secretSpec,
+	state launchState,
 ) (*m.Sandbox, error) {
 	if replace {
 		sandbox, err := createSandbox(ctx, name, append(append([]m.SandboxOption{}, opts...), m.WithReplace()))
 		if err != nil {
 			return nil, err
 		}
-		if err := convergeAfterCreate(ctx, sandbox, secrets); err != nil {
+		if err := convergeAfterCreate(ctx, sandbox, state.secrets); err != nil {
 			return nil, err
 		}
 		return sandbox, nil
 	}
 	handle, err := m.GetSandbox(ctx, name)
 	if err == nil {
-		if err := convergeOnReuse(ctx, name, handle, secrets); err != nil {
+		if err := convergeOnReuse(ctx, name, handle, state); err != nil {
 			return nil, err
 		}
 		return handle.ConnectOrStart(ctx)
@@ -204,7 +188,7 @@ func openSandbox(
 	}
 	sandbox, createErr := createSandbox(ctx, name, opts)
 	if createErr == nil {
-		if err := convergeAfterCreate(ctx, sandbox, secrets); err != nil {
+		if err := convergeAfterCreate(ctx, sandbox, state.secrets); err != nil {
 			return nil, err
 		}
 		return sandbox, nil
@@ -215,7 +199,7 @@ func openSandbox(
 		if handleErr != nil {
 			return nil, createErr
 		}
-		if err := convergeOnReuse(ctx, name, handle, secrets); err != nil {
+		if err := convergeOnReuse(ctx, name, handle, state); err != nil {
 			return nil, err
 		}
 		return handle.ConnectOrStart(ctx)
@@ -246,13 +230,14 @@ func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, secrets []secr
 // convergeOnReuse diffs the stored sandbox config against the desired secrets
 // and fixes drift: a stopped VM gets the persisted patch applied for its next
 // start; a running VM gets a note instead (its restart is left to the user).
-func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, secrets []secretSpec) error {
+func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, state launchState) error {
 	stored, err := parseStoredSecrets(handle.ConfigJSON())
 	if err != nil {
 		return fmt.Errorf("sandbox %s: %w", name, err)
 	}
+	reportPolicyDrift(handle, state.policyFingerprint)
 	if handle.Status() == m.SandboxStatusRunning {
-		plan, err := modifySecrets(ctx, handle, name, stored, secrets, m.ModificationPolicyNextStart)
+		plan, err := modifySecrets(ctx, handle, name, stored, state.secrets, m.ModificationPolicyNextStart)
 		if err != nil {
 			return err
 		}
@@ -262,10 +247,26 @@ func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, 
 		}
 		return nil
 	}
-	if _, err := modifySecrets(ctx, handle, name, stored, secrets, m.ModificationPolicyNextStart); err != nil {
+	if _, err := modifySecrets(ctx, handle, name, stored, state.secrets, m.ModificationPolicyNextStart); err != nil {
 		return err
 	}
 	return nil
+}
+
+// reportPolicyDrift tells the user that a reused VM runs a network policy
+// that is no longer the current one. The policy is part of the sandbox
+// config, so it only reaches a recreated VM.
+func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
+	config, err := handle.Config()
+	if err != nil || config.Labels == nil {
+		return
+	}
+	stored, ok := config.Labels[policyLabelKey]
+	if !ok || stored == fingerprint {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"motte: the network policy changed since this VM was created; recreate it with --replace to apply it\n")
 }
 
 // modifySecrets builds and applies the convergence patch from the drift
@@ -285,7 +286,7 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 	if slices.Contains(remove, opencodeSecretName) {
 		fmt.Fprintf(
 			os.Stderr,
-			"motte: removing the formerly built-in secret %s from sandbox %s; re-enable it with: motte secrets add %s\n",
+			"motte: removing the formerly built-in secret %s from sandbox %s; re-enable it with: motte secrets add (%s)\n",
 			opencodeSecretName,
 			name,
 			opencodeSecretName,
@@ -321,7 +322,7 @@ func resolveSecrets(p *profile) ([]secretSpec, error) {
 	}
 	if count, err := secretCountAll(); err == nil && count == 0 {
 		fmt.Fprintf(os.Stderr,
-			"motte: no secrets configured; to store a key for OpenCode in the OS keychain run: motte secrets add %s\n",
+			"motte: no secrets configured; store a key for OpenCode in the OS keychain with: motte secrets add (%s)\n",
 			opencodeSecretName)
 	}
 	var egress []string
