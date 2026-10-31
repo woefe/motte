@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -143,6 +145,21 @@ func TestValidateSecretAllowEntry(t *testing.T) {
 	}
 }
 
+// readSpec returns the configured settings of a secret, failing the test
+// when its scope file is invalid or the secret is missing.
+func readSpec(t *testing.T, n secretName) secretSpec {
+	t.Helper()
+	secrets, err := readSecretScope(scopeKeyOf(n))
+	if err != nil {
+		t.Fatalf("readSecretScope(%s): %v", n.full, err)
+	}
+	spec, ok := secrets[n.leaf]
+	if !ok {
+		t.Fatalf("secret %s is not configured", n.full)
+	}
+	return spec
+}
+
 // TestReadWriteSecretMeta round-trips a scope file and covers schema
 // strictness: unknown fields fail, allow is required, header fields default.
 func TestReadWriteSecretMeta(t *testing.T) {
@@ -155,14 +172,11 @@ func TestReadWriteSecretMeta(t *testing.T) {
 	if err := writeSecretMeta(name, spec); err != nil {
 		t.Fatalf("writeSecretMeta: %v", err)
 	}
-	got, err := readSecretMeta(name)
-	if err != nil {
-		t.Fatalf("readSecretMeta: %v", err)
-	}
+	got := readSpec(t, name)
 	if got.name != "golang/OPENCODE_GO_KEY" || got.envVar != "OPENCODE_GO_KEY" ||
 		len(got.allow) != 1 || got.allow[0] != "*.opencode.ai" ||
 		len(got.headerFields) != 1 || got.headerFields[0] != "authorization" {
-		t.Fatalf("readSecretMeta = %+v", got)
+		t.Fatalf("readSpec = %+v", got)
 	}
 
 	// The secret lives in the profile's scope file.
@@ -179,7 +193,7 @@ func TestReadWriteSecretMeta(t *testing.T) {
 	// Unknown fields fail lint-style, with the path in the error.
 	writeSecretFS(t, "secrets/golang.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
-	_, err = readSecretMeta(name)
+	_, err = readSecretScope(scopeKeyOf(name))
 	if err == nil || !strings.Contains(err.Error(), "invalid secret config") || !strings.Contains(err.Error(), "alow") {
 		t.Errorf("error = %v, want an unknown-field error naming alow", err)
 	}
@@ -187,14 +201,17 @@ func TestReadWriteSecretMeta(t *testing.T) {
 	// A missing allow list is invalid.
 	writeSecretFS(t, "secrets/golang.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    header_fields: [origin]\n")
-	if _, err := readSecretMeta(name); err == nil || !strings.Contains(err.Error(), "empty allow list") {
+	if _, err := readSecretScope(scopeKeyOf(name)); err == nil || !strings.Contains(err.Error(), "empty allow list") {
 		t.Errorf("error = %v, want an empty-allow error", err)
 	}
 
 	// Allow hosts must be host patterns, not network rule targets.
 	writeSecretFS(t, "secrets/golang.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"host:tcp:9931\"]\n")
-	if _, err := readSecretMeta(name); err == nil || !strings.Contains(err.Error(), "invalid secret allow host") {
+	if _, err := readSecretScope(
+		scopeKeyOf(name),
+	); err == nil ||
+		!strings.Contains(err.Error(), "invalid secret allow host") {
 		t.Errorf("error = %v, want a bad-host error", err)
 	}
 }
@@ -234,13 +251,11 @@ secrets:
 		!strings.Contains(string(content), "# the key we use") {
 		t.Errorf("scope file = %q, want the comments kept", string(content))
 	}
-	for _, name := range []string{"OPENCODE_GO_KEY", "OTHER_SECRET"} {
-		if _, err := readSecretMeta(map[string]secretName{
-			"OPENCODE_GO_KEY": first,
-			"OTHER_SECRET":    second,
-		}[name]); err != nil {
-			t.Errorf("readSecretMeta(%s): %v", name, err)
-		}
+	if spec := readSpec(t, first); spec.allow[0] != "*.opencode.ai" {
+		t.Errorf("first = %+v, want the written allow list", spec)
+	}
+	if spec := readSpec(t, second); spec.allow[0] != "other.example.com" {
+		t.Errorf("second = %+v, want the written allow list", spec)
 	}
 
 	// Removing a secret keeps the file and its remaining secret.
@@ -280,7 +295,11 @@ func TestRemoveLastSecretRemovesTheScopeFile(t *testing.T) {
 	if _, err := os.Stat(scopePath); !os.IsNotExist(err) {
 		t.Errorf("scope file still exists: %v", err)
 	}
-	if secretMetaExists(name) {
+	secrets, err := readSecretScope(scopeKeyOf(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := secrets[name.leaf]; ok {
 		t.Error("the secret still exists after the removal")
 	}
 }
@@ -405,6 +424,260 @@ func TestCollectLsRowsGroupsByScope(t *testing.T) {
 		if rows[i].name != expected.name || rows[i].scopeKey.scope != expected.scope {
 			t.Errorf("row %d = %+v, want %q in scope %d", i, rows[i], expected.name, expected.scope)
 		}
+	}
+}
+
+// TestCollectLsRowsReportsUnreadableScopes keeps a scope whose file fails to
+// parse as a row with its error, instead of a nameless placeholder.
+func TestCollectLsRowsReportsUnreadableScopes(t *testing.T) {
+	isolatedConfigDir(t)
+	swapStore(t, newFakeStore(nil))
+	writeSecretFS(t, "secrets/global.yaml", "secrets: [oops\n")
+	rows, err := collectLsRows()
+	if err != nil {
+		t.Fatalf("collectLsRows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want the one unreadable scope", rows)
+	}
+	if rows[0].specErr == nil || rows[0].name != "" {
+		t.Errorf("row = %+v, want the parse error on a nameless row", rows[0])
+	}
+}
+
+// TestSecretsTemplate covers the scope-file skeletons: the settings comments,
+// and the project path only for the current directory's project scope.
+func TestSecretsTemplate(t *testing.T) {
+	isolatedConfigDir(t)
+	global, err := secretsTemplate(secretScopeKey{scope: scopeGlobal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(global, "secrets:") || !strings.Contains(global, "motte secrets set") {
+		t.Errorf("global template = %q, want the settings comments", global)
+	}
+	project, err := secretsTemplate(secretScopeKey{scope: scopeProject, hash: mustDirHash(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(project, "Project path: ") {
+		t.Errorf("project template = %q, want the project path", project)
+	}
+	foreign, err := secretsTemplate(secretScopeKey{scope: scopeProject, hash: "1234567890ab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(foreign, "Project path: ") {
+		t.Errorf("foreign template = %q, want no project path", foreign)
+	}
+}
+
+// TestSecretsConfigureCreatesAndValidates covers the configure command: a
+// missing scope file is created from the template and validates, and the
+// project scope names the directory it belongs to.
+func TestSecretsConfigureCreatesAndValidates(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("VISUAL", "true")
+	t.Setenv("EDITOR", "true")
+	if err := runSecretsConfigure("global"); err != nil {
+		t.Fatalf("runSecretsConfigure: %v", err)
+	}
+	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "global.yaml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the scope file: %v", err)
+	}
+	if !strings.Contains(string(content), "secrets:") {
+		t.Errorf("scope file = %q, want the template", string(content))
+	}
+	if _, err := readSecretScope(secretScopeKey{scope: scopeGlobal}); err != nil {
+		t.Errorf("the template does not validate: %v", err)
+	}
+
+	if err := runSecretsConfigure("project"); err != nil {
+		t.Fatalf("runSecretsConfigure(project): %v", err)
+	}
+	projectPath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", mustDirHash(t)+".yaml")
+	project, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("reading the project scope file: %v", err)
+	}
+	if !strings.Contains(string(project), "Project path: ") {
+		t.Errorf("project scope file = %q, want the project path", string(project))
+	}
+}
+
+// TestSecretsConfigureRejectsAnInvalidFile covers the re-validation after the
+// editor exits on a pre-existing corrupt file, and the unknown-scope error.
+func TestSecretsConfigureRejectsAnInvalidFile(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("VISUAL", "true")
+	t.Setenv("EDITOR", "true")
+	writeSecretFS(t, "secrets/global.yaml", "secrets:\n  KEY: [oops\n")
+	err := runSecretsConfigure("global")
+	if err == nil {
+		t.Fatal("error = nil, want an invalid-file failure")
+	}
+	var coded exitCoder
+	if !errors.As(err, &coded) || coded.ExitCode() != 1 {
+		t.Errorf("error = %v, want exit code 1", err)
+	}
+	if err := runSecretsConfigure("bogus"); err == nil ||
+		!strings.Contains(err.Error(), "unknown scope") {
+		t.Errorf("error = %v, want an unknown-scope error", err)
+	}
+}
+
+// TestSecretsCommandsSurfaceScopeFileErrors covers add, set, and rm against a
+// corrupt scope file: the real error with the configure hint, instead of a
+// masked not-configured error.
+func TestSecretsCommandsSurfaceScopeFileErrors(t *testing.T) {
+	isolatedConfigDir(t)
+	swapStore(t, newFakeStore(map[string]string{"golang/API_KEY": "old"}))
+	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n  API_KEY: [oops\n")
+	commands := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "add", run: func() error {
+			return addSecret(bufio.NewReader(strings.NewReader("API_KEY\np\ngolang\n")), strings.NewReader(""))
+		}},
+		{name: "set", run: func() error { return runSecretsSet("golang/API_KEY") }},
+		{name: "rm", run: func() error { return runSecretsRm("golang/API_KEY", true) }},
+	}
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			err := command.run()
+			if err == nil || !strings.Contains(err.Error(), "invalid secret config") ||
+				!strings.Contains(err.Error(), "motte secrets configure golang") {
+				t.Errorf("error = %v, want the invalid-config error with the configure hint", err)
+			}
+		})
+	}
+
+	// A healthy scope without the secret: set points at add, rm does not.
+	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n  OTHER:\n    allow: [\"*.example.com\"]\n")
+	if err := runSecretsSet("golang/API_KEY"); err == nil ||
+		!strings.Contains(err.Error(), "motte secrets add") {
+		t.Errorf("set error = %v, want the add hint", err)
+	}
+	if err := runSecretsRm("golang/API_KEY", true); err == nil ||
+		strings.Contains(err.Error(), "add") {
+		t.Errorf("rm error = %v, want no create hint", err)
+	}
+}
+
+// TestAddSecretUpsert covers the interactive flow: a fresh secret stores its
+// value and settings, a configured one pre-fills its settings and replaces the
+// keychain value only on request, and a configured one without a keychain
+// value prompts for it.
+func TestAddSecretUpsert(t *testing.T) {
+	isolatedConfigDir(t)
+	writeSecretFS(t, "secrets/global.yaml",
+		"secrets:\n  FOO:\n    allow:\n      - \"*.foo.example.com\"\n")
+	store := newFakeStore(map[string]string{"FOO": "current"})
+	swapStore(t, store)
+
+	err := addSecret(
+		bufio.NewReader(strings.NewReader("BAR\n\n*.bar.example.com\n")),
+		strings.NewReader("bar-value\n"),
+	)
+	if err != nil {
+		t.Fatalf("addSecret: %v", err)
+	}
+	if store.items["BAR"] != "bar-value" {
+		t.Errorf("keychain BAR = %q, want bar-value", store.items["BAR"])
+	}
+	bar, err := parseSecretName("BAR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec := readSpec(t, bar); spec.allow[0] != "*.bar.example.com" {
+		t.Errorf("BAR allow = %v, want the entered hosts", spec.allow)
+	}
+
+	// Settings-only change: the prefilled default is accepted, the value
+	// prompt is skipped, the keychain value stays.
+	foo, err := parseSecretName("FOO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = addSecret(bufio.NewReader(strings.NewReader("FOO\n\n\nn\n")), strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("addSecret: %v", err)
+	}
+	if store.items["FOO"] != "current" {
+		t.Errorf("keychain FOO = %q, want the kept value", store.items["FOO"])
+	}
+	if spec := readSpec(t, foo); spec.allow[0] != "*.foo.example.com" {
+		t.Errorf("FOO allow = %v, want the prefilled default", spec.allow)
+	}
+
+	// Value replaced on request, hosts changed with it.
+	err = addSecret(
+		bufio.NewReader(strings.NewReader("FOO\n\n*.new.example.com\ny\n")),
+		strings.NewReader("new-value\n"),
+	)
+	if err != nil {
+		t.Fatalf("addSecret: %v", err)
+	}
+	if store.items["FOO"] != "new-value" {
+		t.Errorf("keychain FOO = %q, want new-value", store.items["FOO"])
+	}
+	if spec := readSpec(t, foo); spec.allow[0] != "*.new.example.com" {
+		t.Errorf("FOO allow = %v, want the new hosts", spec.allow)
+	}
+
+	// A configured secret without a keychain value prompts for one.
+	empty := newFakeStore(nil)
+	swapStore(t, empty)
+	err = addSecret(bufio.NewReader(strings.NewReader("FOO\n\n\n")), strings.NewReader("restored\n"))
+	if err != nil {
+		t.Fatalf("addSecret: %v", err)
+	}
+	if empty.items["FOO"] != "restored" {
+		t.Errorf("keychain FOO = %q, want restored", empty.items["FOO"])
+	}
+	if spec := readSpec(t, foo); spec.allow[0] != "*.new.example.com" {
+		t.Errorf("FOO allow = %v, want the kept hosts", spec.allow)
+	}
+}
+
+// TestAddSecretOnAnEmptyScopeTemplate covers the first add on a scope file
+// that configure created from the template: its null `secrets:` widens into
+// a mapping, and the template's comments survive.
+func TestAddSecretOnAnEmptyScopeTemplate(t *testing.T) {
+	isolatedConfigDir(t)
+	key := secretScopeKey{scope: scopeGlobal}
+	path, err := key.path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSecretsTemplate(path, key); err != nil {
+		t.Fatalf("writeSecretsTemplate: %v", err)
+	}
+	swapStore(t, newFakeStore(nil))
+	err = addSecret(
+		bufio.NewReader(strings.NewReader("BAR\n\n*.bar.example.com\n")),
+		strings.NewReader("bar-value\n"),
+	)
+	if err != nil {
+		t.Fatalf("addSecret: %v", err)
+	}
+	name, err := parseSecretName("BAR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec := readSpec(t, name); spec.allow[0] != "*.bar.example.com" {
+		t.Errorf("BAR allow = %v, want the entered hosts", spec.allow)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "# Values live in the OS keychain") ||
+		!strings.Contains(string(content), "# OPENCODE_GO_KEY:") {
+		t.Errorf("scope file = %q, want the template comments", string(content))
 	}
 }
 

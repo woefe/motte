@@ -48,7 +48,7 @@ func policiesConfigureCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "configure <scope>",
 		Short: "open a scope's policy in $VISUAL/$EDITOR",
-		Long:  "The scope is global, a built-in profile name, or project for the current directory.",
+		Long:  "The scope is global, project, a built-in profile name, or a project hash.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPoliciesConfigure(args[0])
@@ -193,11 +193,12 @@ func fileExists(path string) bool {
 
 // runPoliciesConfigure opens a scope's policy file in the editor and
 // re-validates it afterwards.
-func runPoliciesConfigure(scopeArg string) error {
-	target, err := resolvePolicyTarget(scopeArg)
+func runPoliciesConfigure(scope string) error {
+	arg, err := resolveScopeArg(scope)
 	if err != nil {
 		return err
 	}
+	target := policyTargetFromArg(arg)
 	path, err := policyTargetPath(target)
 	if err != nil {
 		return err
@@ -212,7 +213,7 @@ func runPoliciesConfigure(scopeArg string) error {
 	}
 	if _, err := readPolicyFile(path); err != nil {
 		fmt.Fprintf(os.Stderr, "motte: %s is invalid after editing: %v\n", path, err)
-		fmt.Fprintf(os.Stderr, "motte: fix it with `motte policies configure %s`\n", scopeArg)
+		fmt.Fprintf(os.Stderr, "motte: fix it with `motte policies configure %s`\n", scope)
 		return exitCoder{code: 1}
 	}
 	fmt.Fprintf(os.Stderr, "motte: %s is valid\n", path)

@@ -105,6 +105,36 @@ func profileArgs(cmd *cobra.Command, args []string) error {
 	}
 }
 
+// scopeArg is a resolved configure argument: exactly one field is set —
+// profile, hash, or neither for the global scope.
+type scopeArg struct {
+	profile string
+	hash    string
+}
+
+// resolveScopeArg resolves a configure argument: "global", "project", a
+// built-in profile name, or a 12-hex project hash.
+func resolveScopeArg(arg string) (scopeArg, error) {
+	switch {
+	case arg == "global":
+		return scopeArg{}, nil
+	case arg == "project":
+		hash, err := dirHash()
+		if err != nil {
+			return scopeArg{}, err
+		}
+		return scopeArg{hash: hash}, nil
+	case slices.Contains(availableProfiles(), arg):
+		return scopeArg{profile: arg}, nil
+	case secretHashPattern.MatchString(arg):
+		return scopeArg{hash: arg}, nil
+	default:
+		return scopeArg{}, fmt.Errorf(
+			"unknown scope %q; expected global, project, a profile (%s), or a project hash",
+			arg, strings.Join(availableProfiles(), ", "))
+	}
+}
+
 // printHelp writes a command's help to its error output.
 func printHelp(cmd *cobra.Command) {
 	w := cmd.ErrOrStderr()

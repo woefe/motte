@@ -63,7 +63,11 @@ motte policies ls                    # list the policy files and their entries
 motte policies configure global      # edit a scope's policy in $VISUAL/$EDITOR
 motte policies configure golang      # a profile scope
 motte policies configure project     # the current directory
+motte policies configure <dir-hash>  # another directory's project policy
 ```
+
+A missing scope file is created from a commented template before the editor opens.
+The scope is `global`, `project`, a profile name, or a directory hash.
 
 The network policy is part of the sandbox config, so it only lands on a newly created VM.
 When a reused VM runs an older policy, the launch prints a notice; `--replace` recreates the VM with the current policy.
@@ -125,12 +129,16 @@ secrets:
 More specific configs shadow less specific ones by env var name, in project > profile > global precedence.
 
 ```sh
-motte secrets add               # create a secret; prompts for name, scope, hosts, value
+motte secrets add               # create or change a secret; prompts for name, scope, hosts, value
 motte secrets set <name>        # (re)set the value; reads one line from stdin when piped
-motte secrets configure <name>  # edit the scope's YAML in $VISUAL/$EDITOR (or nano/vi)
+motte secrets configure <scope> # edit a scope's YAML in $VISUAL/$EDITOR (or nano/vi)
 motte secrets rm <name> [-f]    # delete the secret's config and keychain value
 motte secrets ls                # list secrets grouped by scope, with keychain presence
 ```
+
+A missing scope file is created from a commented template before the editor opens.
+The scope is `global`, `project`, a profile name, or a directory hash.
+Running `motte secrets add` on an existing secret keeps its settings as prompt defaults and asks whether to replace the keychain value.
 
 A launch fails when a configured secret has no keychain value, with a hint to run `motte secrets set <name>`.
 Launching with no secrets configured at all prints a hint to `motte secrets add` instead.

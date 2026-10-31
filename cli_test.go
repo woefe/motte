@@ -107,6 +107,7 @@ func TestSecretsCommandErrors(t *testing.T) {
 		{"secrets", "rm", "a", "b"},
 		{"secrets", "add", "a"},
 		{"secrets", "ls", "a"},
+		{"secrets", "configure", "bogus"},
 	} {
 		if err := execute(t, args...); err == nil {
 			t.Errorf("execute(%v) = nil, want a usage error", args)

@@ -50,31 +50,49 @@ func TestPolicyScopesMapToFiles(t *testing.T) {
 	}
 }
 
-// TestResolvePolicyTarget accepts the global scope, the built-in profiles,
-// and the project scope, and rejects everything else.
-func TestResolvePolicyTarget(t *testing.T) {
+// TestResolveScopeArg accepts the global scope, the project scope, the
+// built-in profiles, and a project hash, and rejects everything else.
+func TestResolveScopeArg(t *testing.T) {
 	isolatedConfigDir(t)
-	global, err := resolvePolicyTarget("global")
-	if err != nil || global.scope != scopePolicyGlobal {
-		t.Fatalf("global = %+v %v", global, err)
-	}
-	profile, err := resolvePolicyTarget("golang")
-	if err != nil || profile.scope != scopePolicyProfile || profile.profile != "golang" {
-		t.Fatalf("golang = %+v %v", profile, err)
-	}
-	project, err := resolvePolicyTarget("project")
-	if err != nil || project.scope != scopePolicyProject {
-		t.Fatalf("project = %+v %v", project, err)
-	}
 	hash, err := dirHash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if project.hash != hash {
-		t.Errorf("project hash = %q, want %q", project.hash, hash)
+	tests := []struct {
+		arg        string
+		want       scopeArg
+		wantTarget policyTarget
+	}{
+		{arg: "global", wantTarget: policyTarget{scope: scopePolicyGlobal}},
+		{
+			arg: "project", want: scopeArg{hash: hash},
+			wantTarget: policyTarget{scope: scopePolicyProject, hash: hash},
+		},
+		{
+			arg: "golang", want: scopeArg{profile: "golang"},
+			wantTarget: policyTarget{scope: scopePolicyProfile, profile: "golang"},
+		},
+		{
+			arg: "1234567890ab", want: scopeArg{hash: "1234567890ab"},
+			wantTarget: policyTarget{scope: scopePolicyProject, hash: "1234567890ab"},
+		},
 	}
-	if _, err := resolvePolicyTarget("bogus"); err == nil ||
-		!strings.Contains(err.Error(), "unknown policy scope") {
+	for _, test := range tests {
+		t.Run(test.arg, func(t *testing.T) {
+			got, err := resolveScopeArg(test.arg)
+			if err != nil {
+				t.Fatalf("resolveScopeArg: %v", err)
+			}
+			if got != test.want {
+				t.Errorf("resolveScopeArg(%q) = %+v, want %+v", test.arg, got, test.want)
+			}
+			if target := policyTargetFromArg(got); target != test.wantTarget {
+				t.Errorf("policyTargetFromArg(%+v) = %+v, want %+v", got, target, test.wantTarget)
+			}
+		})
+	}
+	if _, err := resolveScopeArg("bogus"); err == nil ||
+		!strings.Contains(err.Error(), "unknown scope") {
 		t.Errorf("error = %v, want an unknown-scope error", err)
 	}
 }
@@ -334,12 +352,35 @@ func TestPoliciesConfigureRejectsAnInvalidFile(t *testing.T) {
 }
 
 // TestPoliciesConfigureRejectsAnUnknownScope rejects a scope that is neither
-// global, project, nor a built-in profile.
+// global, project, a profile, nor a project hash.
 func TestPoliciesConfigureRejectsAnUnknownScope(t *testing.T) {
 	isolatedConfigDir(t)
 	err := runPoliciesConfigure("bogus")
-	if err == nil || !strings.Contains(err.Error(), "unknown policy scope") {
+	if err == nil || !strings.Contains(err.Error(), "unknown scope") {
 		t.Errorf("error = %v, want an unknown-scope error", err)
+	}
+}
+
+// TestPoliciesConfigureCreatesTheTemplateForAHash covers a project scope
+// addressed by hash: the template is created without a project path, since
+// motte cannot know that directory.
+func TestPoliciesConfigureCreatesTheTemplateForAHash(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("VISUAL", "true")
+	t.Setenv("EDITOR", "true")
+	if err := runPoliciesConfigure("1234567890ab"); err != nil {
+		t.Fatalf("runPoliciesConfigure: %v", err)
+	}
+	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies", "1234567890ab.yaml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the policy file: %v", err)
+	}
+	if !strings.Contains(string(content), "project 1234567890ab") {
+		t.Errorf("policy file = %q, want the hash in the header", string(content))
+	}
+	if strings.Contains(string(content), "Project path:") {
+		t.Errorf("policy file = %q, want no project path for a foreign hash", string(content))
 	}
 }
 
