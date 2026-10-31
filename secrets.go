@@ -136,6 +136,18 @@ func scopeKeyOf(n secretName) secretScopeKey {
 	}
 }
 
+// scopeKeyFromArg maps a resolved configure argument to its scope key.
+func scopeKeyFromArg(arg scopeArg) secretScopeKey {
+	switch {
+	case arg.profile != "":
+		return secretScopeKey{scope: scopeProfile, profile: arg.profile}
+	case arg.hash != "":
+		return secretScopeKey{scope: scopeProject, hash: arg.hash}
+	default:
+		return secretScopeKey{scope: scopeGlobal}
+	}
+}
+
 // prefix returns the scope prefix of a secret name.
 func (k secretScopeKey) prefix() string {
 	switch k.scope {
@@ -163,6 +175,21 @@ func (k secretScopeKey) label() string {
 		return "profile " + k.profile
 	case scopeProject:
 		return "project " + k.hash
+	default:
+		return "global"
+	}
+}
+
+// configureArg renders the scope as a `motte secrets configure` argument.
+func (k secretScopeKey) configureArg() string {
+	switch k.scope {
+	case scopeProfile:
+		return k.profile
+	case scopeProject:
+		if hash, err := dirHash(); err == nil && hash == k.hash {
+			return "project"
+		}
+		return k.hash
 	default:
 		return "global"
 	}
@@ -347,8 +374,9 @@ func emptySecretScope() *yaml.Node {
 	}
 }
 
-// secretsMapping returns the "secrets" mapping of a scope document, creating
-// it when it is missing.
+// secretsMapping returns the "secrets" mapping of a scope document. A missing
+// key is appended; a null value (an empty `secrets:`) becomes an empty
+// mapping in place, keeping its comments.
 func secretsMapping(doc *yaml.Node) (*yaml.Node, error) {
 	if len(doc.Content) == 0 {
 		return nil, fmt.Errorf("the secret config has no document")
@@ -360,10 +388,17 @@ func secretsMapping(doc *yaml.Node) (*yaml.Node, error) {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value == "secrets" {
 			mapping := root.Content[i+1]
-			if mapping.Kind != yaml.MappingNode {
+			switch {
+			case mapping.Kind == yaml.MappingNode:
+				return mapping, nil
+			case mapping.Tag == "!!null":
+				mapping.Kind = yaml.MappingNode
+				mapping.Tag = "!!map"
+				mapping.Value = ""
+				return mapping, nil
+			default:
 				return nil, fmt.Errorf("the secret config's `secrets` is not a mapping")
 			}
-			return mapping, nil
 		}
 	}
 	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
@@ -434,27 +469,42 @@ func writeSecretScope(path string, doc *yaml.Node) error {
 	return nil
 }
 
-// secretMetaExists reports whether a secret is configured in its scope.
-func secretMetaExists(n secretName) bool {
-	secrets, err := readSecretScope(scopeKeyOf(n))
-	if err != nil {
-		return false
+// secretsTemplate returns the commented skeleton of a new secrets scope file.
+// The project scope of the current directory names the directory it belongs
+// to, so the file identifies its location.
+func secretsTemplate(key secretScopeKey) (string, error) {
+	header := fmt.Sprintf("# motte secrets — %s\n#\n", key.label())
+	if hash, err := dirHash(); err == nil && key.scope == scopeProject && hash == key.hash {
+		path, err := projectPath()
+		if err != nil {
+			return "", err
+		}
+		header += fmt.Sprintf("# Project path: %s\n#\n", path)
 	}
-	_, ok := secrets[n.leaf]
-	return ok
+	return header + "# Values live in the OS keychain; set one with `motte secrets set <name>`.\n" +
+		"# This file holds the settings only:\n" +
+		"#   allow: the hosts a value may reach (an exact host or a *.wildcard)\n" +
+		"#   header_fields: the headers the value is substituted into\n" +
+		"secrets:\n" +
+		"  # OPENCODE_GO_KEY:\n" +
+		"  #   allow:\n" +
+		"  #     - \"*.opencode.ai\"\n", nil
 }
 
-// readSecretMeta returns the settings of one configured secret.
-func readSecretMeta(n secretName) (secretSpec, error) {
-	secrets, err := readSecretScope(scopeKeyOf(n))
+// writeSecretsTemplate creates a secrets scope file with the commented
+// skeleton.
+func writeSecretsTemplate(path string, key secretScopeKey) error {
+	template, err := secretsTemplate(key)
 	if err != nil {
-		return secretSpec{}, err
+		return err
 	}
-	spec, ok := secrets[n.leaf]
-	if !ok {
-		return secretSpec{}, fmt.Errorf("secret %s is not configured", n.full)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	return spec, nil
+	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
+		return fmt.Errorf("writing secret config %s: %w", path, err)
+	}
+	return nil
 }
 
 // writeSecretMeta adds or replaces one secret in its scope file. The file

@@ -16,8 +16,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -92,24 +90,15 @@ func policyTargetLabel(target policyTarget) string {
 	}
 }
 
-// resolvePolicyTarget turns a scope argument into a resolved scope: "global",
-// a built-in profile name, or "project" for the current directory.
-func resolvePolicyTarget(name string) (policyTarget, error) {
+// policyTargetFromArg maps a resolved configure argument to its policy target.
+func policyTargetFromArg(arg scopeArg) policyTarget {
 	switch {
-	case name == "global":
-		return policyTarget{scope: scopePolicyGlobal}, nil
-	case name == "project":
-		hash, err := dirHash()
-		if err != nil {
-			return policyTarget{}, err
-		}
-		return policyTarget{scope: scopePolicyProject, hash: hash}, nil
-	case slices.Contains(availableProfiles(), name):
-		return policyTarget{scope: scopePolicyProfile, profile: name}, nil
+	case arg.profile != "":
+		return policyTarget{scope: scopePolicyProfile, profile: arg.profile}
+	case arg.hash != "":
+		return policyTarget{scope: scopePolicyProject, hash: arg.hash}
 	default:
-		return policyTarget{}, fmt.Errorf(
-			"unknown policy scope %q; expected global, project, or one of %s",
-			name, strings.Join(availableProfiles(), ", "))
+		return policyTarget{scope: scopePolicyGlobal}
 	}
 }
 
@@ -187,12 +176,12 @@ func readPolicyFile(path string) ([]string, error) {
 	return allow, nil
 }
 
-// policyTemplate returns the commented skeleton of a new policy file. A
-// project policy names the directory it belongs to, so the file identifies
-// its location.
+// policyTemplate returns the commented skeleton of a new policy file. The
+// project scope of the current directory names the directory it belongs to,
+// so the file identifies its location.
 func policyTemplate(target policyTarget) (string, error) {
 	header := fmt.Sprintf("# motte network policy — %s\n#\n", policyTargetLabel(target))
-	if target.scope == scopePolicyProject {
+	if hash, err := dirHash(); err == nil && target.scope == scopePolicyProject && hash == target.hash {
 		path, err := projectPath()
 		if err != nil {
 			return "", err
