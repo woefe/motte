@@ -100,7 +100,7 @@ func secretsRmCommand() *cobra.Command {
 func secretsLsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
-		Short: "list secrets grouped by scope",
+		Short: "list the configured secrets grouped by scope, with keychain presence",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSecretsLs()
@@ -347,115 +347,101 @@ func runSecretsRm(nameArg string, force bool) error {
 	return nil
 }
 
-// lsRow is one listed secret with its keychain state or load error.
+// lsRow is one listed secret with its keychain state.
 type lsRow struct {
-	scopeKey secretScopeKey
 	name     string // the full path-like name of the secret
 	spec     secretSpec
 	keychain string // "yes", "no", or "?" on a store error
-	specErr  error
 }
 
-// runSecretsLs lists configured secrets grouped by scope.
+// runSecretsLs lists the secrets of the existing scope files, grouped by
+// scope, with keychain presence and the allowed hosts.
 func runSecretsLs() error {
-	rows, err := collectLsRows()
+	root, err := secretsDir()
 	if err != nil {
 		return err
 	}
-	if len(rows) == 0 {
+	scopes, err := lsScopes(root)
+	if err != nil {
+		return err
+	}
+	if len(scopes) == 0 {
 		fmt.Fprintln(os.Stderr, "no secrets configured; create one with `motte secrets add`")
 		return nil
 	}
-
 	hash, hashErr := dirHash()
-
-	// The rows come grouped by scope already: the global scope, then the
-	// profiles, then the projects.
-	prev := ""
-	for _, row := range rows {
-		group := lsGroup(row.scopeKey, hash, hashErr)
-		if row.scopeKey.scope == scopeProject && hashErr == nil && row.scopeKey.hash == hash {
-			group += " (this directory)"
-		}
-		if group != prev {
-			fmt.Printf("\n%s\n", group)
-			prev = group
-		}
-		if row.specErr != nil {
-			fmt.Printf("  <unreadable: %v>\n", row.specErr)
-			continue
-		}
-		fmt.Printf("  %s\tkeychain: %s\tallow: %s\n", row.name, row.keychain, strings.Join(row.spec.allow, ", "))
-	}
-	fmt.Println()
-	warnShadowedLeaves(rows)
-	if hashErr == nil {
-		fmt.Printf("project hash for the current directory: %s\n", hash)
-	}
-	return nil
-}
-
-// lsGroup renders the scope header of one listing group.
-func lsGroup(key secretScopeKey, hash string, hashErr error) string {
-	switch key.scope {
-	case scopeGlobal:
-		return "global:"
-	case scopeProfile:
-		return fmt.Sprintf("profile %s:", key.profile)
-	default:
-		if hashErr == nil && key.hash == hash {
-			return "project:"
-		}
-		return fmt.Sprintf("project %s:", key.hash)
-	}
-}
-
-// collectLsRows gathers the secrets of every scope, leniently listing the
-// scopes whose file cannot be read.
-func collectLsRows() ([]lsRow, error) {
-	keys, err := secretScopeKeys()
-	if err != nil {
-		return nil, err
-	}
 	var rows []lsRow
-	for _, key := range keys {
+	for i, scope := range scopes {
+		if i > 0 {
+			fmt.Println()
+		}
+		key := scopeKeyFromArg(scope)
+		thisDir := hashErr == nil && scope.hash != "" && scope.hash == hash
+		fmt.Printf("%s:\n", labelScope(scope.profile, scope.hash, thisDir))
 		secrets, err := readSecretScope(key)
 		if err != nil {
-			rows = append(rows, lsRow{scopeKey: key, specErr: err})
+			fmt.Printf("  <unreadable: %v>\n", err)
 			continue
 		}
+		var group []lsRow
 		for _, envVar := range sortedSecretNames(secrets) {
 			spec := secrets[envVar]
-			rows = append(rows, lsRow{
-				scopeKey: key,
+			group = append(group, lsRow{
 				name:     spec.name,
 				spec:     spec,
 				keychain: probeKeychain(spec.name),
 			})
 		}
+		if len(group) == 0 {
+			fmt.Printf("  (no secrets)\n")
+			continue
+		}
+		rows = append(rows, group...)
+		printLsGroup(group)
 	}
-	return rows, nil
+	if notes := shadowNotes(rows); len(notes) > 0 {
+		fmt.Println()
+		for _, note := range notes {
+			fmt.Println(note)
+		}
+	}
+	return nil
 }
 
-// warnShadowedLeaves prints one note per env var defined in several scopes.
-func warnShadowedLeaves(rows []lsRow) {
+// printLsGroup prints one scope's secrets as a table aligned by name.
+func printLsGroup(group []lsRow) {
+	width := 0
+	for _, row := range group {
+		if len(row.name) > width {
+			width = len(row.name)
+		}
+	}
+	for _, row := range group {
+		fmt.Printf("  %-*s  keychain: %s  allow: %s\n",
+			width, row.name, row.keychain, strings.Join(row.spec.allow, ", "))
+	}
+}
+
+// shadowNotes returns one note per env var configured in several scopes; the
+// most specific scope wins.
+func shadowNotes(rows []lsRow) []string {
 	count := map[string]int{}
 	for _, row := range rows {
-		if row.specErr == nil {
-			count[row.spec.envVar]++
-		}
+		count[row.spec.envVar]++
 	}
 	var leaves []string
 	for leaf, n := range count {
-		if n <= 1 {
-			continue
+		if n > 1 {
+			leaves = append(leaves, leaf)
 		}
-		leaves = append(leaves, leaf)
 	}
 	sort.Strings(leaves)
+	notes := make([]string, 0, len(leaves))
 	for _, leaf := range leaves {
-		fmt.Printf("note: %s is configured in %d scopes; the most specific wins\n", leaf, count[leaf])
+		notes = append(notes, fmt.Sprintf(
+			"note: %s is configured in %d scopes; the most specific wins", leaf, count[leaf]))
 	}
+	return notes
 }
 
 // --- prompt helpers ---------------------------------------------------------
@@ -557,7 +543,8 @@ func warnLargeValue(value string) {
 
 // scopeLabel renders a secret's scope for one-line notices.
 func scopeLabel(n secretName) string {
-	return scopeKeyOf(n).label()
+	key := scopeKeyOf(n)
+	return labelScope(key.profile, key.hash, false)
 }
 
 // runEditor opens path in $VISUAL/$EDITOR, or nano/vi, attached to the

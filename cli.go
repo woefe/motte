@@ -10,8 +10,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -133,6 +137,62 @@ func resolveScopeArg(arg string) (scopeArg, error) {
 			"unknown scope %q; expected global, project, a profile (%s), or a project hash",
 			arg, strings.Join(availableProfiles(), ", "))
 	}
+}
+
+// labelScope renders a scope for listings and template headers: "global",
+// "profile <name>", or "project <hash>"; thisDir marks the current
+// directory's project.
+func labelScope(profile, hash string, thisDir bool) string {
+	switch {
+	case profile != "":
+		return "profile " + profile
+	case hash != "":
+		if thisDir {
+			return "project " + hash + " (this directory)"
+		}
+		return "project " + hash
+	default:
+		return "global"
+	}
+}
+
+// lsScopes returns the scopes that have a file in a config tree, ordered:
+// the global scope, the built-in profiles, then the projects sorted by hash.
+func lsScopes(root string) ([]scopeArg, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", root, err)
+	}
+	existing := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		existing[strings.TrimSuffix(entry.Name(), ".yaml")] = true
+	}
+	var scopes []scopeArg
+	if existing["global"] {
+		scopes = append(scopes, scopeArg{})
+	}
+	for _, profile := range availableProfiles() {
+		if existing[profile] {
+			scopes = append(scopes, scopeArg{profile: profile})
+		}
+	}
+	var hashes []string
+	for name := range existing {
+		if secretHashPattern.MatchString(name) {
+			hashes = append(hashes, name)
+		}
+	}
+	sort.Strings(hashes)
+	for _, hash := range hashes {
+		scopes = append(scopes, scopeArg{hash: hash})
+	}
+	return scopes, nil
 }
 
 // printHelp writes a command's help to its error output.

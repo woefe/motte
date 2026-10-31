@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -23,6 +24,29 @@ func workingDir(t *testing.T) string {
 func isolatedConfigDir(t *testing.T) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
+// captureOutput runs f with stdout and stderr piped, and returns what was
+// printed on each. Only for outputs far below the pipe buffer.
+func captureOutput(t *testing.T, f func()) (stdout, stderr string) {
+	t.Helper()
+	originalStdout, originalStderr := os.Stdout, os.Stderr
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = stdoutWriter, stderrWriter
+	f()
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	os.Stdout, os.Stderr = originalStdout, originalStderr
+	stdoutData, _ := io.ReadAll(stdoutReader)
+	stderrData, _ := io.ReadAll(stderrReader)
+	return string(stdoutData), string(stderrData)
 }
 
 // builtinImages returns the image reference of every built-in profile.
