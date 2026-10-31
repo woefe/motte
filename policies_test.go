@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -384,41 +385,103 @@ func TestPoliciesConfigureCreatesTheTemplateForAHash(t *testing.T) {
 	}
 }
 
-// TestCollectPolicyRows lists every scope that applies to a launch, with the
-// entries of the files that exist.
-func TestCollectPolicyRows(t *testing.T) {
+// TestLsScopes lists the scopes that have a file in a config tree, ordered:
+// global, the built-in profiles, then the projects sorted by hash.
+func TestLsScopes(t *testing.T) {
+	isolatedConfigDir(t)
+	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies")
+	for _, name := range []string{"global.yaml", "golang.yaml", "1234567890ab.yaml", "ffffffffffff.yaml", "bogus.yaml"} {
+		writePolicyFile(t, name, "")
+	}
+	scopes, err := lsScopes(root)
+	if err != nil {
+		t.Fatalf("lsScopes: %v", err)
+	}
+	want := []scopeArg{
+		{},
+		{profile: "golang"},
+		{hash: "1234567890ab"},
+		{hash: "ffffffffffff"},
+	}
+	if len(scopes) != len(want) {
+		t.Fatalf("scopes = %+v, want %+v", scopes, want)
+	}
+	for i := range want {
+		if scopes[i] != want[i] {
+			t.Errorf("scope %d = %+v, want %+v", i, scopes[i], want[i])
+		}
+	}
+	if scopes, err = lsScopes(filepath.Join(root, "missing")); err != nil || scopes != nil {
+		t.Errorf("lsScopes(missing) = %+v %v, want none without an error", scopes, err)
+	}
+}
+
+// TestPoliciesLsListsGroups covers the grouped listing: only scopes with
+// files, blank lines between groups, the current-directory mark, and
+// placeholder bodies.
+func TestPoliciesLsListsGroups(t *testing.T) {
 	isolatedConfigDir(t)
 	hash, err := dirHash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	writePolicyFile(t, "global.yaml", "network:\n  allow:\n    - \"global.example.com\"\n")
+	writePolicyFile(t, "global.yaml", "network:\n  allow:\n    - \"global.example.com\"\n    - \"*.opencode.ai\"\n")
+	writePolicyFile(t, "golang.yaml", "network:\n  allow: []\n")
 	writePolicyFile(t, hash+".yaml", "network:\n  allow:\n    - \"project.example.com\"\n")
-	rows, err := collectPolicyRows()
-	if err != nil {
-		t.Fatalf("collectPolicyRows: %v", err)
-	}
-	var globalRows, projectRows, missingRows int
-	for _, row := range rows {
-		switch {
-		case row.target.scope == scopePolicyGlobal:
-			globalRows++
-			if len(row.entries) != 1 || row.entries[0] != "global.example.com" {
-				t.Errorf("global entries = %v", row.entries)
-			}
-		case row.target.scope == scopePolicyProject && row.target.hash == hash:
-			projectRows++
-			if len(row.entries) != 1 || row.entries[0] != "project.example.com" {
-				t.Errorf("project entries = %v", row.entries)
-			}
-		case !row.exists:
-			missingRows++
+	writePolicyFile(t, "ffffffffffff.yaml", "network:\n  allow:\n    - \"other.example.com\"\n")
+	stdout, stderr := captureOutput(t, func() {
+		if err := runPoliciesLs(); err != nil {
+			t.Errorf("runPoliciesLs: %v", err)
 		}
+	})
+	want := fmt.Sprintf(`global:
+  global.example.com
+  *.opencode.ai
+
+profile golang:
+  (no entries)
+
+project %s (this directory):
+  project.example.com
+
+project ffffffffffff:
+  other.example.com
+`, hash)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
-	if globalRows != 1 || projectRows != 1 {
-		t.Errorf("rows = %d global, %d project, want one of each", globalRows, projectRows)
+	if stderr != "" {
+		t.Errorf("stderr = %q, want none", stderr)
 	}
-	if missingRows != len(availableProfiles()) {
-		t.Errorf("missing rows = %d, want one per profile", missingRows)
+}
+
+// TestPoliciesLsEmpty prints the create hint when no policy file exists.
+func TestPoliciesLsEmpty(t *testing.T) {
+	isolatedConfigDir(t)
+	stdout, stderr := captureOutput(t, func() {
+		if err := runPoliciesLs(); err != nil {
+			t.Errorf("runPoliciesLs: %v", err)
+		}
+	})
+	if stdout != "" {
+		t.Errorf("stdout = %q, want none", stdout)
+	}
+	if !strings.Contains(stderr, "no policies configured") {
+		t.Errorf("stderr = %q, want the create hint", stderr)
+	}
+}
+
+// TestPoliciesLsReportsUnreadableScopes shows a scope's parse error under its
+// group header.
+func TestPoliciesLsReportsUnreadableScopes(t *testing.T) {
+	isolatedConfigDir(t)
+	writePolicyFile(t, "global.yaml", "network: [oops\n")
+	stdout, _ := captureOutput(t, func() {
+		if err := runPoliciesLs(); err != nil {
+			t.Errorf("runPoliciesLs: %v", err)
+		}
+	})
+	if !strings.HasPrefix(stdout, "global:\n  <unreadable: ") {
+		t.Errorf("stdout = %q, want the unreadable group", stdout)
 	}
 }

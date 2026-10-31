@@ -390,58 +390,76 @@ func TestResolveSecrets(t *testing.T) {
 	}
 }
 
-// TestCollectLsRowsGroupsByScope covers the listing rows: one row per
-// configured secret, ordered by scope.
-func TestCollectLsRowsGroupsByScope(t *testing.T) {
+// TestSecretsLsListsGroups covers the grouped listing: rows aligned by name,
+// the current-directory mark, placeholder bodies, and the shadowing note.
+func TestSecretsLsListsGroups(t *testing.T) {
 	isolatedConfigDir(t)
-	swapStore(t, newFakeStore(nil))
+	swapStore(t, newFakeStore(map[string]string{"OPENCODE_GO_KEY": "value"}))
 	hash, err := dirHash()
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeSecretFS(t, "secrets/global.yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n")
-	writeSecretFS(t, "secrets/golang.yaml",
-		"secrets:\n  LANG_KEY:\n    allow:\n      - \"lang.example.com\"\n")
+		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n"+
+			"  ANOTHER_KEY:\n    allow:\n      - \"a.example.com\"\n      - \"b.example.com\"\n")
+	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n")
 	writeSecretFS(t, "secrets/"+hash+".yaml",
-		"secrets:\n  PROJECT_KEY:\n    allow:\n      - \"project.example.com\"\n")
-	rows, err := collectLsRows()
-	if err != nil {
-		t.Fatalf("collectLsRows: %v", err)
-	}
-	if len(rows) != 3 {
-		t.Fatalf("rows = %+v, want 3", rows)
-	}
-	want := []struct {
-		name  string
-		scope secretScope
-	}{
-		{name: "OPENCODE_GO_KEY", scope: scopeGlobal},
-		{name: "golang/LANG_KEY", scope: scopeProfile},
-		{name: hash + "/PROJECT_KEY", scope: scopeProject},
-	}
-	for i, expected := range want {
-		if rows[i].name != expected.name || rows[i].scopeKey.scope != expected.scope {
-			t.Errorf("row %d = %+v, want %q in scope %d", i, rows[i], expected.name, expected.scope)
+		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"project.example.com\"\n")
+	stdout, stderr := captureOutput(t, func() {
+		if err := runSecretsLs(); err != nil {
+			t.Errorf("runSecretsLs: %v", err)
 		}
+	})
+	want := fmt.Sprintf(`global:
+  ANOTHER_KEY      keychain: no  allow: a.example.com, b.example.com
+  OPENCODE_GO_KEY  keychain: yes  allow: *.opencode.ai
+
+profile golang:
+  (no secrets)
+
+project %s (this directory):
+  %s/OPENCODE_GO_KEY  keychain: no  allow: project.example.com
+
+note: OPENCODE_GO_KEY is configured in 2 scopes; the most specific wins
+`, hash, hash)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want none", stderr)
 	}
 }
 
-// TestCollectLsRowsReportsUnreadableScopes keeps a scope whose file fails to
-// parse as a row with its error, instead of a nameless placeholder.
-func TestCollectLsRowsReportsUnreadableScopes(t *testing.T) {
+// TestSecretsLsEmpty prints the create hint when no scope file exists.
+func TestSecretsLsEmpty(t *testing.T) {
+	isolatedConfigDir(t)
+	swapStore(t, newFakeStore(nil))
+	stdout, stderr := captureOutput(t, func() {
+		if err := runSecretsLs(); err != nil {
+			t.Errorf("runSecretsLs: %v", err)
+		}
+	})
+	if stdout != "" {
+		t.Errorf("stdout = %q, want none", stdout)
+	}
+	if !strings.Contains(stderr, "no secrets configured") {
+		t.Errorf("stderr = %q, want the create hint", stderr)
+	}
+}
+
+// TestSecretsLsReportsUnreadableScopes shows a scope's parse error under its
+// group header.
+func TestSecretsLsReportsUnreadableScopes(t *testing.T) {
 	isolatedConfigDir(t)
 	swapStore(t, newFakeStore(nil))
 	writeSecretFS(t, "secrets/global.yaml", "secrets: [oops\n")
-	rows, err := collectLsRows()
-	if err != nil {
-		t.Fatalf("collectLsRows: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("rows = %+v, want the one unreadable scope", rows)
-	}
-	if rows[0].specErr == nil || rows[0].name != "" {
-		t.Errorf("row = %+v, want the parse error on a nameless row", rows[0])
+	stdout, _ := captureOutput(t, func() {
+		if err := runSecretsLs(); err != nil {
+			t.Errorf("runSecretsLs: %v", err)
+		}
+	})
+	if !strings.HasPrefix(stdout, "global:\n  <unreadable: ") {
+		t.Errorf("stdout = %q, want the unreadable group", stdout)
 	}
 }
 

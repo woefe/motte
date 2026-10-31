@@ -59,7 +59,7 @@ User config can only widen egress, never narrow it.
 Only `network.allow` is accepted; unknown keys or invalid entries fail the launch, with the file path in the error.
 
 ```sh
-motte policies ls                    # list the policy files and their entries
+motte policies ls                    # list the policy files grouped by scope
 motte policies configure global      # edit a scope's policy in $VISUAL/$EDITOR
 motte policies configure golang      # a profile scope
 motte policies configure project     # the current directory
@@ -125,7 +125,7 @@ secrets:
       - "*.opencode.ai"
 ```
 
-`motte secrets ls` prints the project hash of the current directory.
+Both `ls` commands list only the scopes that have a file, and mark the current directory's project scope.
 More specific configs shadow less specific ones by env var name, in project > profile > global precedence.
 
 ```sh

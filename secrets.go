@@ -168,18 +168,6 @@ func (k secretScopeKey) name(envVar string) string {
 	return envVar
 }
 
-// label renders the scope for messages and listings.
-func (k secretScopeKey) label() string {
-	switch k.scope {
-	case scopeProfile:
-		return "profile " + k.profile
-	case scopeProject:
-		return "project " + k.hash
-	default:
-		return "global"
-	}
-}
-
 // configureArg renders the scope as a `motte secrets configure` argument.
 func (k secretScopeKey) configureArg() string {
 	switch k.scope {
@@ -473,7 +461,7 @@ func writeSecretScope(path string, doc *yaml.Node) error {
 // The project scope of the current directory names the directory it belongs
 // to, so the file identifies its location.
 func secretsTemplate(key secretScopeKey) (string, error) {
-	header := fmt.Sprintf("# motte secrets — %s\n#\n", key.label())
+	header := fmt.Sprintf("# motte secrets — %s\n#\n", labelScope(key.profile, key.hash, false))
 	if hash, err := dirHash(); err == nil && key.scope == scopeProject && hash == key.hash {
 		path, err := projectPath()
 		if err != nil {
@@ -619,52 +607,20 @@ func sortedSecretNames(secrets map[string]secretSpec) []string {
 	return names
 }
 
-// secretScopeKeys returns every scope that has a file in the secrets tree:
-// the global scope, the built-in profiles, and the project files.
-func secretScopeKeys() ([]secretScopeKey, error) {
-	root, err := secretsDir()
-	if err != nil {
-		return nil, err
-	}
-	keys := []secretScopeKey{{scope: scopeGlobal}}
-	for _, profile := range availableProfiles() {
-		keys = append(keys, secretScopeKey{scope: scopeProfile, profile: profile})
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return keys, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", root, err)
-	}
-	var hashes []string
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-			continue
-		}
-		name := strings.TrimSuffix(entry.Name(), ".yaml")
-		if !secretHashPattern.MatchString(name) {
-			continue
-		}
-		hashes = append(hashes, name)
-	}
-	sort.Strings(hashes)
-	for _, hash := range hashes {
-		keys = append(keys, secretScopeKey{scope: scopeProject, hash: hash})
-	}
-	return keys, nil
-}
-
 // secretCountAll returns how many secrets are configured under any scope;
 // used for the first-run hint.
 func secretCountAll() (int, error) {
-	keys, err := secretScopeKeys()
+	root, err := secretsDir()
+	if err != nil {
+		return 0, err
+	}
+	scopes, err := lsScopes(root)
 	if err != nil {
 		return 0, err
 	}
 	count := 0
-	for _, key := range keys {
-		secrets, err := readSecretScope(key)
+	for _, scope := range scopes {
+		secrets, err := readSecretScope(scopeKeyFromArg(scope))
 		if err != nil {
 			return 0, err
 		}

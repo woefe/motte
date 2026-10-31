@@ -78,18 +78,6 @@ func policyTargetPath(target policyTarget) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-// policyTargetLabel renders a scope for messages and listings.
-func policyTargetLabel(target policyTarget) string {
-	switch target.scope {
-	case scopePolicyGlobal:
-		return "global"
-	case scopePolicyProfile:
-		return target.profile
-	default:
-		return "project " + target.hash
-	}
-}
-
 // policyTargetFromArg maps a resolved configure argument to its policy target.
 func policyTargetFromArg(arg scopeArg) policyTarget {
 	switch {
@@ -180,7 +168,7 @@ func readPolicyFile(path string) ([]string, error) {
 // project scope of the current directory names the directory it belongs to,
 // so the file identifies its location.
 func policyTemplate(target policyTarget) (string, error) {
-	header := fmt.Sprintf("# motte network policy — %s\n#\n", policyTargetLabel(target))
+	header := fmt.Sprintf("# motte network policy — %s\n#\n", labelScope(target.profile, target.hash, false))
 	if hash, err := dirHash(); err == nil && target.scope == scopePolicyProject && hash == target.hash {
 		path, err := projectPath()
 		if err != nil {
