@@ -371,53 +371,6 @@ func TestResolveSecrets(t *testing.T) {
 	}
 }
 
-// TestSecretsMvMovesTheEntryBetweenScopeFiles covers the mv command: the
-// entry moves into the target scope file, the keychain account is re-keyed,
-// and the source scope file goes away when it holds nothing else.
-func TestSecretsMvMovesTheEntryBetweenScopeFiles(t *testing.T) {
-	isolatedConfigDir(t)
-	store := newFakeStore(map[string]string{"golang/OPENCODE_GO_KEY": "sk_test"})
-	swapStore(t, store)
-	name, err := parseSecretName("golang/OPENCODE_GO_KEY")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeSecretMeta(name, secretSpec{
-		allow:        []string{"*.opencode.ai"},
-		headerFields: []string{"authorization"},
-	}); err != nil {
-		t.Fatalf("writeSecretMeta: %v", err)
-	}
-	if err := runSecretsMv("golang/OPENCODE_GO_KEY", "OPENCODE_GO_KEY"); err != nil {
-		t.Fatalf("runSecretsMv: %v", err)
-	}
-
-	global, err := parseSecretName("OPENCODE_GO_KEY")
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := readSecretMeta(global)
-	if err != nil {
-		t.Fatalf("readSecretMeta: %v", err)
-	}
-	if len(spec.allow) != 1 || spec.allow[0] != "*.opencode.ai" {
-		t.Errorf("spec = %+v, want the moved hosts", spec)
-	}
-	if secretMetaExists(name) {
-		t.Error("the secret is still in the profile scope")
-	}
-	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
-	if _, err := os.Stat(scopePath); !os.IsNotExist(err) {
-		t.Errorf("the empty scope file still exists: %v", err)
-	}
-	if value, err := store.get("OPENCODE_GO_KEY"); err != nil || value != "sk_test" {
-		t.Errorf("keychain value = %q %v, want sk_test", value, err)
-	}
-	if _, err := store.get("golang/OPENCODE_GO_KEY"); err == nil {
-		t.Error("the old keychain account still holds the value")
-	}
-}
-
 // TestCollectLsRowsGroupsByScope covers the listing rows: one row per
 // configured secret, ordered by scope.
 func TestCollectLsRowsGroupsByScope(t *testing.T) {

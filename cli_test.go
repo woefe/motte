@@ -75,7 +75,7 @@ func TestRootCommandErrors(t *testing.T) {
 		{name: "no command", wantRe: ""},
 		{name: "profile name", args: []string{"golang"}, wantRe: `did you mean "motte oc golang"`},
 		{name: "typo", args: []string{"secretes"}, wantRe: `did you mean "motte secrets"`},
-		{name: "unknown", args: []string{"frobnicate"}, wantRe: "expected opencode, policies, or secrets"},
+		{name: "unknown", args: []string{"frobnicate"}, wantRe: "expected opencode, oc, policies, or secrets"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -105,7 +105,6 @@ func TestSecretsCommandErrors(t *testing.T) {
 		{"secrets", "configure"},
 		{"secrets", "rm"},
 		{"secrets", "rm", "a", "b"},
-		{"secrets", "mv", "a"},
 		{"secrets", "add", "a"},
 		{"secrets", "ls", "a"},
 	} {

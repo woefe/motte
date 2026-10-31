@@ -130,7 +130,6 @@ motte secrets set <name>        # (re)set the value; reads one line from stdin w
 motte secrets configure <name>  # edit the scope's YAML in $VISUAL/$EDITOR (or nano/vi)
 motte secrets rm <name> [-f]    # delete the secret's config and keychain value
 motte secrets ls                # list secrets grouped by scope, with keychain presence
-motte secrets mv <old> <new>    # rename; moves the config and re-keys the keychain value
 ```
 
 A launch fails when a configured secret has no keychain value, with a hint to run `motte secrets set <name>`.
