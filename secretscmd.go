@@ -3,8 +3,7 @@
 // add interactively creates a secret (name, scope, allowed hosts, value);
 // set replaces an existing secret's value; configure opens the secret's scope
 // file in $VISUAL/$EDITOR and re-validates it; rm deletes it after
-// confirmation; ls lists the secrets grouped by scope with keychain presence;
-// mv moves a secret to another scope and re-keys its keychain entry.
+// confirmation; ls lists the secrets grouped by scope with keychain presence.
 package main
 
 import (
@@ -45,7 +44,6 @@ func secretsCommand() *cobra.Command {
 		secretsConfigureCommand(),
 		secretsRmCommand(),
 		secretsLsCommand(),
-		secretsMvCommand(),
 	)
 	return secrets
 }
@@ -109,18 +107,6 @@ func secretsLsCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSecretsLs()
-		},
-	}
-}
-
-// secretsMvCommand renames a secret and moves it to another scope.
-func secretsMvCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "mv <old> <new>",
-		Short: "rename a secret, moving config and keychain value",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretsMv(args[0], args[1])
 		},
 	}
 }
@@ -316,7 +302,7 @@ func runSecretsRm(nameArg string, force bool) error {
 		return err
 	}
 	if !secretMetaExists(name) {
-		return fmt.Errorf("secret %s is not configured", name.full)
+		return fmt.Errorf("secret %s is not configured; create it with `motte secrets add`", name.full)
 	}
 	confirmed, err := confirmPrompt(fmt.Sprintf("delete %s and its keychain value? [y/N]: ", name.full), force)
 	if err != nil {
@@ -446,54 +432,6 @@ func warnShadowedLeaves(rows []lsRow) {
 	for _, leaf := range leaves {
 		fmt.Printf("note: %s is configured in %d scopes; the most specific wins\n", leaf, count[leaf])
 	}
-}
-
-// runSecretsMv moves a secret's config and re-keys its keychain value.
-func runSecretsMv(oldArg, newArg string) error {
-	oldName, err := parseSecretName(oldArg)
-	if err != nil {
-		return err
-	}
-	newName, err := parseSecretName(newArg)
-	if err != nil {
-		return err
-	}
-	if oldName.full == newName.full {
-		return fmt.Errorf("source and target are the same secret")
-	}
-	if !secretMetaExists(oldName) {
-		return fmt.Errorf("secret %s is not configured", oldName.full)
-	}
-	if secretMetaExists(newName) {
-		return fmt.Errorf("secret %s is already configured", newName.full)
-	}
-	spec, err := readSecretMeta(oldName)
-	if err != nil {
-		return err
-	}
-	spec.name = newName.full
-	value, configErr := defaultSecretStore.get(oldName.full)
-	if configErr != nil {
-		fmt.Fprintf(os.Stderr, "motte: note: %s has no keychain value; only the configuration moves\n", oldName.full)
-	}
-	if value != "" {
-		if err := defaultSecretStore.set(newName.full, value); err != nil {
-			return err
-		}
-	}
-	if err := writeSecretMeta(newName, spec); err != nil {
-		return err
-	}
-	if err := removeSecretMeta(oldName); err != nil {
-		return err
-	}
-	if value != "" {
-		if err := defaultSecretStore.delete(oldName.full); err != nil {
-			return err
-		}
-	}
-	fmt.Fprintf(os.Stderr, "motte: renamed %s to %s\n", oldName.full, newName.full)
-	return nil
 }
 
 // --- prompt helpers ---------------------------------------------------------

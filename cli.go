@@ -3,7 +3,7 @@
 //	motte opencode <profile> [--no-pull] [--replace]
 //	motte policies ls
 //	motte policies configure <scope>
-//	motte secrets <add|set|configure|rm|ls|mv>
+//	motte secrets <add|set|configure|rm|ls>
 //
 // The tree is built with cobra; every command carries its own help. Errors
 // are printed by run in motte's own style, without cobra's usage dump.
@@ -66,7 +66,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			"unknown command %q; did you mean %q?", arg, "motte "+suggestions[0])}
 	}
 	return exitCoder{code: 1, message: fmt.Sprintf(
-		"unknown command %q; expected opencode, policies, or secrets", arg)}
+		"unknown command %q; expected opencode, oc, policies, or secrets", arg)}
 }
 
 // opencodeCommand boots a profile and attaches the OpenCode TUI to it.

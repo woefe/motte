@@ -15,7 +15,7 @@ Motte provides profiles for isolated development environments for agentic develo
 - motte launcher
   - `motte opencode|oc <profile> [--no-pull] [--replace]` starts a profile in an isolated microsandbox VM via the Go SDK
   - `motte policies <ls|configure>` manages the user network policies
-  - `motte secrets <add|set|configure|rm|ls|mv>` manages keychain-backed secrets
+  - `motte secrets <add|set|configure|rm|ls>` manages keychain-backed secrets
 - built-in profiles are defined as Go structs in `profile.go` (compiled into the binary)
 - user policies and secrets live in scope files under `$XDG_CONFIG_HOME/motte/{policies,secrets}`
 
