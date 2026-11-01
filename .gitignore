@@ -1,4 +1,6 @@
 /motte
 cmd/motte/motte
+coverage.out
+coverage.html
 TODO.md
 mise.local.toml

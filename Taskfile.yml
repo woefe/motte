@@ -6,11 +6,15 @@ version: "3"
 # while a long command (e.g. go test) is running.
 output: group
 
+vars:
+  COVERAGE_FILE: coverage.out
+  COVERAGE_HTML: coverage.html
+
 tasks:
   # All checks run in parallel; failfast stops the rest once one fails.
   lint:
     desc: Run all linters and Go checks in parallel
-    deps: [editorconfig, yamllint, hadolint, go]
+    deps: [editorconfig, yamllint, hadolint, go, build, test]
     failfast: true
 
   editorconfig:
@@ -27,13 +31,27 @@ tasks:
 
   go:
     cmds:
-      # golangci-lint covers vet-style linters + formatting (see .golangci.yml).
       - golangci-lint run ./...
-      - go test ./...
+
+  test:
+    desc: Run the tests and report coverage
+    vars:
+      TEST_PKGS:
+        sh: go list ./... | grep -v /testutil | paste -sd, -
+    cmds:
+      - go test -covermode=atomic -coverprofile={{.COVERAGE_FILE}} -coverpkg={{.TEST_PKGS}} ./...
+      - go tool cover -func={{.COVERAGE_FILE}} | tail -n1
+      - go tool cover -html={{.COVERAGE_FILE}} -o {{.COVERAGE_HTML}}
+
+  ci-coverage:
+    desc: Run tests and write the coverage total to the GitHub step summary
+    cmds:
+      - task: test
+      - go tool cover -func={{.COVERAGE_FILE}} | tail -n1 >> "$GITHUB_STEP_SUMMARY"
 
   build:
     cmds:
-      - go build ./cmd/motte
+      - go build -buildmode=pie -trimpath -ldflags="-s -w" ./cmd/motte
 
   # Local builds for trying image changes without pushing: the images are
   # tagged with the same ghcr.io refs the profiles reference, so a subsequent
