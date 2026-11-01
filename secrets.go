@@ -75,10 +75,8 @@ type secretName struct {
 	leaf    string
 }
 
-var (
-	secretLeafPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	secretHashPattern = regexp.MustCompile(`^[0-9a-f]{12}$`)
-)
+// secretLeafPattern matches the leaf (env var) segment of a secret name.
+var secretLeafPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // parseSecretName validates a path-like secret name and resolves its scope.
 // A single segment is a global secret; two segments are profile-scoped when
@@ -97,7 +95,7 @@ func parseSecretName(name string) (secretName, error) {
 		switch {
 		case slices.Contains(availableProfiles(), parts[0]):
 			n.scope, n.profile = scopeProfile, parts[0]
-		case secretHashPattern.MatchString(parts[0]):
+		case projectHashPattern.MatchString(parts[0]):
 			n.scope, n.hash = scopeProject, parts[0]
 		default:
 			return secretName{}, fmt.Errorf(
@@ -253,15 +251,6 @@ func probeKeychain(account string) string {
 	default:
 		return "?"
 	}
-}
-
-// secretsDir returns the root of the per-user secrets config tree.
-func secretsDir() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locating the user config dir: %w", err)
-	}
-	return filepath.Join(dir, "motte", "secrets"), nil
 }
 
 // secretScopeDoc is the schema of a scope file: the secrets it holds.
@@ -477,22 +466,6 @@ func secretsTemplate(key secretScopeKey) (string, error) {
 		"  # OPENCODE_GO_KEY:\n" +
 		"  #   allow:\n" +
 		"  #     - \"*.opencode.ai\"\n", nil
-}
-
-// writeSecretsTemplate creates a secrets scope file with the commented
-// skeleton.
-func writeSecretsTemplate(path string, key secretScopeKey) error {
-	template, err := secretsTemplate(key)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
-		return fmt.Errorf("writing secret config %s: %w", path, err)
-	}
-	return nil
 }
 
 // writeSecretMeta adds or replaces one secret in its scope file. The file

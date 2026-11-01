@@ -17,6 +17,8 @@ Motte provides profiles for isolated development environments for agentic develo
   - `motte policies <ls|configure>` manages the user network policies
   - `motte secrets <add|set|configure|rm|ls>` manages keychain-backed secrets
 - built-in profiles are defined as Go structs in `profile.go` (compiled into the binary)
+- `scope.go` resolves the config scopes: global, one per built-in profile, and one per project directory (hashed from its path)
+- `config.go` owns motte's config tree: the per-scope file paths, writing file skeletons, and the shared editor configure flow
 - user policies and secrets live in scope files under `$XDG_CONFIG_HOME/motte/{policies,secrets}`
 
 ## Project constraints

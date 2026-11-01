@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -95,11 +94,12 @@ func TestSecretScopeFiles(t *testing.T) {
 	}
 	tests := []struct {
 		name secretName
+		arg  string
 		want string
 	}{
-		{name: secretName{scope: scopeGlobal}, want: "global.yaml"},
-		{name: secretName{scope: scopeProfile, profile: "golang"}, want: "golang.yaml"},
-		{name: secretName{scope: scopeProject, hash: hash}, want: hash + ".yaml"},
+		{name: secretName{scope: scopeGlobal}, arg: "global", want: "global.yaml"},
+		{name: secretName{scope: scopeProfile, profile: "golang"}, arg: "golang", want: "golang.yaml"},
+		{name: secretName{scope: scopeProject, hash: hash}, arg: "project", want: hash + ".yaml"},
 	}
 	for _, test := range tests {
 		path, err := scopeKeyOf(test.name).path()
@@ -108,6 +108,18 @@ func TestSecretScopeFiles(t *testing.T) {
 		}
 		if filepath.Base(path) != test.want {
 			t.Errorf("path = %q, want %q", filepath.Base(path), test.want)
+		}
+		// The commands reach the same file through their scope argument.
+		arg, err := resolveScopeArg(test.arg)
+		if err != nil {
+			t.Fatalf("resolveScopeArg(%q): %v", test.arg, err)
+		}
+		argPath, err := scopeKeyFromArg(arg).path()
+		if err != nil {
+			t.Fatalf("path: %v", err)
+		}
+		if filepath.Base(argPath) != test.want {
+			t.Errorf("path from the %q scope = %q, want %q", test.arg, filepath.Base(argPath), test.want)
 		}
 	}
 }
@@ -466,8 +478,7 @@ func TestSecretsTemplate(t *testing.T) {
 // project scope gets a file of its own.
 func TestSecretsConfigureCreatesAndValidates(t *testing.T) {
 	isolatedConfigDir(t)
-	t.Setenv("VISUAL", "true")
-	t.Setenv("EDITOR", "true")
+	fakeEditor(t)
 	if err := runSecretsConfigure("global"); err != nil {
 		t.Fatalf("runSecretsConfigure: %v", err)
 	}
@@ -500,17 +511,9 @@ func TestSecretsConfigureCreatesAndValidates(t *testing.T) {
 // editor exits on a pre-existing corrupt file.
 func TestSecretsConfigureRejectsAnInvalidFile(t *testing.T) {
 	isolatedConfigDir(t)
-	t.Setenv("VISUAL", "true")
-	t.Setenv("EDITOR", "true")
+	fakeEditor(t)
 	writeConfigFile(t, "secrets/global.yaml", "secrets:\n  KEY: [oops\n")
-	err := runSecretsConfigure("global")
-	if err == nil {
-		t.Fatal("error = nil, want an invalid-file failure")
-	}
-	var coded exitCoder
-	if !errors.As(err, &coded) || coded.ExitCode() != 1 {
-		t.Errorf("error = %v, want exit code 1", err)
-	}
+	assertConfigureRejects(t, runSecretsConfigure)
 }
 
 // TestSecretsCommandsSurfaceScopeFileErrors covers add, set, and rm against a
@@ -638,8 +641,12 @@ func TestAddSecretOnAnEmptyScopeTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeSecretsTemplate(path, key); err != nil {
-		t.Fatalf("writeSecretsTemplate: %v", err)
+	template, err := secretsTemplate(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNewFile(path, template); err != nil {
+		t.Fatalf("writeNewFile: %v", err)
 	}
 	swapStore(t, newFakeStore(nil))
 	err = addSecret(

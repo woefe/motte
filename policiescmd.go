@@ -6,7 +6,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -107,19 +106,10 @@ func runPoliciesConfigure(scope string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err := writePolicyTemplate(path, target); err != nil {
-			return err
-		}
-	}
-	if err := runEditor(path); err != nil {
-		return err
-	}
-	if _, err := readPolicyFile(path); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %s is invalid after editing: %v\n", path, err)
-		fmt.Fprintf(os.Stderr, "motte: fix it with `motte policies configure %s`\n", scope)
-		return exitCoder{code: 1}
-	}
-	fmt.Fprintf(os.Stderr, "motte: %s is valid\n", path)
-	return nil
+	return configureScope(scopeFile{
+		path:     path,
+		fixCmd:   fmt.Sprintf("motte policies configure %s", scope),
+		template: func() (string, error) { return policyTemplate(target) },
+		read:     func() error { _, err := readPolicyFile(path); return err },
+	})
 }

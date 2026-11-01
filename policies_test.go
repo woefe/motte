@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,50 +34,21 @@ func assertAllowUnique(t *testing.T, allow []string) {
 	}
 }
 
-// TestResolveScopeArg accepts the global scope, the project scope, the
-// built-in profiles, and a project hash, and rejects everything else.
-func TestResolveScopeArg(t *testing.T) {
-	isolatedConfigDir(t)
-	hash, err := dirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestPolicyTargetFromArg maps a resolved scope argument onto the policy file
+// it addresses.
+func TestPolicyTargetFromArg(t *testing.T) {
 	tests := []struct {
-		arg        string
-		want       scopeArg
-		wantTarget policyTarget
+		arg  scopeArg
+		want policyTarget
 	}{
-		{arg: "global", wantTarget: policyTarget{scope: scopePolicyGlobal}},
-		{
-			arg: "project", want: scopeArg{hash: hash},
-			wantTarget: policyTarget{scope: scopePolicyProject, hash: hash},
-		},
-		{
-			arg: "golang", want: scopeArg{profile: "golang"},
-			wantTarget: policyTarget{scope: scopePolicyProfile, profile: "golang"},
-		},
-		{
-			arg: "1234567890ab", want: scopeArg{hash: "1234567890ab"},
-			wantTarget: policyTarget{scope: scopePolicyProject, hash: "1234567890ab"},
-		},
+		{arg: scopeArg{}, want: policyTarget{scope: scopePolicyGlobal}},
+		{arg: scopeArg{profile: "golang"}, want: policyTarget{scope: scopePolicyProfile, profile: "golang"}},
+		{arg: scopeArg{hash: "1234567890ab"}, want: policyTarget{scope: scopePolicyProject, hash: "1234567890ab"}},
 	}
 	for _, test := range tests {
-		t.Run(test.arg, func(t *testing.T) {
-			got, err := resolveScopeArg(test.arg)
-			if err != nil {
-				t.Fatalf("resolveScopeArg: %v", err)
-			}
-			if got != test.want {
-				t.Errorf("resolveScopeArg(%q) = %+v, want %+v", test.arg, got, test.want)
-			}
-			if target := policyTargetFromArg(got); target != test.wantTarget {
-				t.Errorf("policyTargetFromArg(%+v) = %+v, want %+v", got, target, test.wantTarget)
-			}
-		})
-	}
-	if _, err := resolveScopeArg("bogus"); err == nil ||
-		!strings.Contains(err.Error(), "unknown scope") {
-		t.Errorf("error = %v, want an unknown-scope error", err)
+		if got := policyTargetFromArg(test.arg); got != test.want {
+			t.Errorf("policyTargetFromArg(%+v) = %+v, want %+v", test.arg, got, test.want)
+		}
 	}
 }
 
@@ -250,8 +220,7 @@ func TestPolicyTemplate(t *testing.T) {
 // for the global scope, this directory's project scope, and a foreign hash.
 func TestPoliciesConfigureCreatesTheTemplate(t *testing.T) {
 	isolatedConfigDir(t)
-	t.Setenv("VISUAL", "true")
-	t.Setenv("EDITOR", "true")
+	fakeEditor(t)
 	for _, scope := range []string{"global", "project", "1234567890ab"} {
 		if err := runPoliciesConfigure(scope); err != nil {
 			t.Fatalf("runPoliciesConfigure(%s): %v", scope, err)
@@ -281,43 +250,9 @@ func TestPoliciesConfigureCreatesTheTemplate(t *testing.T) {
 // editor exits.
 func TestPoliciesConfigureRejectsAnInvalidFile(t *testing.T) {
 	isolatedConfigDir(t)
-	t.Setenv("VISUAL", "true")
-	t.Setenv("EDITOR", "true")
+	fakeEditor(t)
 	writeConfigFile(t, "policies/global.yaml", "network:\n  alow:\n    - \"extra.example.com\"\n")
-	err := runPoliciesConfigure("global")
-	if err == nil {
-		t.Fatal("error = nil, want an invalid-file failure")
-	}
-	var coded exitCoder
-	if !errors.As(err, &coded) || coded.ExitCode() != 1 {
-		t.Errorf("error = %v, want exit code 1", err)
-	}
-}
-
-// TestLsScopesSkipsNonScopeFiles lists only the files whose names are a scope:
-// a directory, a wrong extension, and an unknown name are all skipped, and a
-// config tree that does not exist yet holds no scopes. The order of the
-// scopes is pinned by the ls command tests.
-func TestLsScopesSkipsNonScopeFiles(t *testing.T) {
-	isolatedConfigDir(t)
-	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies")
-	for _, name := range []string{"global.yaml", "golang.yaml", "1234567890ab.yaml", "bogus.yaml", "global.yml"} {
-		writeConfigFile(t, "policies/"+name, "")
-	}
-	if err := os.Mkdir(filepath.Join(root, "archive.yaml"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	scopes, err := lsScopes(root)
-	if err != nil {
-		t.Fatalf("lsScopes: %v", err)
-	}
-	want := []scopeArg{{}, {profile: "golang"}, {hash: "1234567890ab"}}
-	if !slices.Equal(scopes, want) {
-		t.Errorf("scopes = %+v, want %+v", scopes, want)
-	}
-	if scopes, err = lsScopes(filepath.Join(root, "missing")); err != nil || scopes != nil {
-		t.Errorf("lsScopes(missing) = %+v %v, want none without an error", scopes, err)
-	}
+	assertConfigureRejects(t, runPoliciesConfigure)
 }
 
 // TestPoliciesLsListsGroups covers the grouped listing: only scopes with

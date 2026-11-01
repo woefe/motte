@@ -51,15 +51,6 @@ type policyNetworkDoc struct {
 	Allow []string `yaml:"allow"`
 }
 
-// policiesDir returns the root of the per-user policy tree.
-func policiesDir() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locating the user config dir: %w", err)
-	}
-	return filepath.Join(dir, "motte", "policies"), nil
-}
-
 // policyTargetPath maps a resolved scope to its policy file.
 func policyTargetPath(target policyTarget) (string, error) {
 	root, err := policiesDir()
@@ -184,21 +175,6 @@ network:
   allow:
     # - "*.example.com"
 `, nil
-}
-
-// writePolicyTemplate creates a policy file with the commented skeleton.
-func writePolicyTemplate(path string, target policyTarget) error {
-	template, err := policyTemplate(target)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
-		return fmt.Errorf("writing policy %s: %w", path, err)
-	}
-	return nil
 }
 
 // policyFingerprint returns a short digest of the profile's effective

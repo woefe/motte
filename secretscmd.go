@@ -12,8 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -294,21 +292,12 @@ func runSecretsConfigure(scope string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err := writeSecretsTemplate(path, key); err != nil {
-			return err
-		}
-	}
-	if err := runEditor(path); err != nil {
-		return err
-	}
-	if _, err := readSecretScope(key); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %s is invalid after editing: %v\n", path, err)
-		fmt.Fprintf(os.Stderr, "motte: fix it with `motte secrets configure %s`\n", scope)
-		return exitCoder{code: 1}
-	}
-	fmt.Fprintf(os.Stderr, "motte: %s is valid\n", path)
-	return nil
+	return configureScope(scopeFile{
+		path:     path,
+		fixCmd:   fmt.Sprintf("motte secrets configure %s", scope),
+		template: func() (string, error) { return secretsTemplate(key) },
+		read:     func() error { _, err := readSecretScope(key); return err },
+	})
 }
 
 // runSecretsRm deletes a secret's config and keychain value after asking.
@@ -545,43 +534,6 @@ func warnLargeValue(value string) {
 func scopeLabel(n secretName) string {
 	key := scopeKeyOf(n)
 	return labelScope(key.profile, key.hash, false)
-}
-
-// runEditor opens path in $VISUAL/$EDITOR, or nano/vi, attached to the
-// terminal. Editors configured with arguments go through the shell.
-func runEditor(path string) error {
-	editor := strings.TrimSpace(os.Getenv("VISUAL"))
-	if editor == "" {
-		editor = strings.TrimSpace(os.Getenv("EDITOR"))
-	}
-	if editor == "" {
-		editor = "nano"
-		if _, err := exec.LookPath("nano"); err != nil {
-			if _, viErr := exec.LookPath("vi"); viErr != nil {
-				return fmt.Errorf("no editor found; set $VISUAL or $EDITOR")
-			}
-			editor = "vi"
-		}
-	}
-	var cmd *exec.Cmd
-	if strings.ContainsAny(editor, " \t") {
-		cmd = exec.Command("sh", "-c", editor+` "$1"`, "editor", path)
-	} else {
-		cmd = exec.Command(editor, path)
-	}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("editor %q on %s: %w", editor, path, err)
-	}
-	return nil
-}
-
-// motteConfigHint names the user config dir in error messages.
-func motteConfigHint() string {
-	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "motte")
-	}
-	return filepath.Join("<user config dir>", "motte")
 }
 
 // secretsConfigHint names a secret's scope file for interactive messages.

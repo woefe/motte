@@ -17,27 +17,6 @@ func execute(t *testing.T, args ...string) error {
 	return root.Execute()
 }
 
-// TestLabelScope renders the shared scope labels: "global", "profile <name>",
-// and "project <hash>" with the current-directory mark.
-func TestLabelScope(t *testing.T) {
-	tests := []struct {
-		profile, hash string
-		thisDir       bool
-		want          string
-	}{
-		{want: "global"},
-		{profile: "golang", want: "profile golang"},
-		{hash: "1234567890ab", want: "project 1234567890ab"},
-		{hash: "1234567890ab", thisDir: true, want: "project 1234567890ab (this directory)"},
-	}
-	for _, test := range tests {
-		if got := labelScope(test.profile, test.hash, test.thisDir); got != test.want {
-			t.Errorf("labelScope(%q, %q, %v) = %q, want %q",
-				test.profile, test.hash, test.thisDir, got, test.want)
-		}
-	}
-}
-
 // TestOpenCodeBootsTheProfile checks that both command names resolve and hand
 // the profile and their flags to the boot.
 func TestOpenCodeBootsTheProfile(t *testing.T) {

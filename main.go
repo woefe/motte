@@ -16,12 +16,9 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -117,32 +114,6 @@ func bootProfile(profileName string, noPull, replace bool) (int, error) {
 		return 1, fmt.Errorf("attaching to %s: %w", name, attachErr)
 	}
 	return code, nil
-}
-
-// projectPath returns the resolved current working directory, the directory
-// the project-scoped files and sandboxes belong to. Symlinks are resolved so
-// linked or renamed paths share a scope.
-func projectPath() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("resolving the working directory: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		return "", fmt.Errorf("resolving symlinks in %s: %w", cwd, err)
-	}
-	return resolved, nil
-}
-
-// dirHash returns a short hash of the resolved current working directory, so
-// every directory maps to one stable, unique sandbox-name fragment.
-func dirHash() (string, error) {
-	resolved, err := projectPath()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(resolved))
-	return hex.EncodeToString(sum[:6]), nil
 }
 
 // sandboxName returns the msb VM name for a profile in this directory: the

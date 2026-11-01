@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -78,4 +79,26 @@ func captureOutput(t *testing.T, f func()) (stdout, stderr string) {
 	stdoutData, _ := io.ReadAll(stdoutReader)
 	stderrData, _ := io.ReadAll(stderrReader)
 	return string(stdoutData), string(stderrData)
+}
+
+// fakeEditor makes the configure flow's editor step succeed without changing
+// the file it opens.
+func fakeEditor(t *testing.T) {
+	t.Helper()
+	t.Setenv("VISUAL", "true")
+	t.Setenv("EDITOR", "true")
+}
+
+// assertConfigureRejects covers the configure flow's re-validation: a scope
+// file that fails to parse after editing exits non-zero.
+func assertConfigureRejects(t *testing.T, configure func(scope string) error) {
+	t.Helper()
+	err := configure("global")
+	if err == nil {
+		t.Fatal("error = nil, want an invalid-file failure")
+	}
+	var coded exitCoder
+	if !errors.As(err, &coded) || coded.ExitCode() != 1 {
+		t.Errorf("error = %v, want exit code 1", err)
+	}
 }
