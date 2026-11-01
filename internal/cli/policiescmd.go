@@ -48,7 +48,7 @@ func policiesConfigureCommand() *cobra.Command {
 		Use:   "configure <scope>",
 		Short: "open a scope's policy in $VISUAL/$EDITOR",
 		Long:  "The scope is global, project, a built-in profile name, or a project hash.",
-		Args:  cobra.ExactArgs(1),
+		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPoliciesConfigure(args[0])
 		},

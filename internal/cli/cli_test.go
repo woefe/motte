@@ -130,6 +130,65 @@ func TestPoliciesCommandErrors(t *testing.T) {
 	}
 }
 
+// TestIncompleteCommandsPrintHelp checks that commands invoked with a missing
+// mandatory argument print their help alone, without an error message after
+// it, and exit with 1.
+func TestIncompleteCommandsPrintHelp(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		wantRe string
+	}{
+		{
+			name: "oc without profile",
+			args: []string{"motte", "oc"},
+			wantRe: "The profile is a built-in one: base, golang, rails, web." +
+				"\n\nUsage:\n  motte opencode <profile> [flags]",
+		},
+		{
+			name: "opencode without profile", args: []string{"motte", "opencode"},
+			wantRe: "Usage:\n  motte opencode <profile> [flags]",
+		},
+		{
+			name: "policies configure without scope",
+			args: []string{"motte", "policies", "configure"},
+			wantRe: "The scope is global, project, a built-in profile name, or a project hash." +
+				"\n\nUsage:\n  motte policies configure <scope> [flags]",
+		},
+		{
+			name: "secrets rm without name", args: []string{"motte", "secrets", "rm"},
+			wantRe: "Usage:\n  motte secrets rm <name> [flags]",
+		},
+		{
+			name: "secrets set without name", args: []string{"motte", "secrets", "set"},
+			wantRe: "Usage:\n  motte secrets set <name> [flags]",
+		},
+		{
+			name:   "secrets configure without scope",
+			args:   []string{"motte", "secrets", "configure"},
+			wantRe: "Usage:\n  motte secrets configure <scope> [flags]",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var code int
+			stdout, stderr := testutil.CaptureOutput(t, func() { code = Run(test.args) })
+			if code != 1 {
+				t.Errorf("Run(%v) = %d, want 1", test.args, code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want an empty stdout", stdout)
+			}
+			if !strings.Contains(stderr, test.wantRe) {
+				t.Errorf("stderr = %q, want containing %q", stderr, test.wantRe)
+			}
+			if strings.Contains(stderr, "\nmotte: ") {
+				t.Errorf("stderr = %q has an error message after the help", stderr)
+			}
+		})
+	}
+}
+
 // TestRunExitCodes checks the exit code Run returns and what it prints for a
 // failing and a succeeding command.
 func TestRunExitCodes(t *testing.T) {

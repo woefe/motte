@@ -62,7 +62,7 @@ func secretsSetCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <name>",
 		Short: "(re)set an existing secret's value",
-		Args:  cobra.ExactArgs(1),
+		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSecretsSet(args[0])
 		},
@@ -75,7 +75,7 @@ func secretsConfigureCommand() *cobra.Command {
 		Use:   "configure <scope>",
 		Short: "open a scope's secrets file in $VISUAL/$EDITOR",
 		Long:  "The scope is global, project, a built-in profile name, or a project hash.",
-		Args:  cobra.ExactArgs(1),
+		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSecretsConfigure(args[0])
 		},
@@ -88,7 +88,7 @@ func secretsRmCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rm <name>",
 		Short: "delete a secret's config and keychain value",
-		Args:  cobra.ExactArgs(1),
+		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSecretsRm(args[0], force)
 		},

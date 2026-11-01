@@ -7,6 +7,7 @@
 //
 // The tree is built with cobra; every command carries its own help. Errors
 // are printed by Run in motte's own style, without cobra's usage dump.
+// Incomplete commands print their help and exit.
 package cli
 
 import (
@@ -109,7 +110,8 @@ func opencodeCommand() *cobra.Command {
 		Use:     "opencode <profile>",
 		Aliases: []string{"oc"},
 		Short:   "boot a profile and attach the OpenCode TUI",
-		Args:    profileArgs,
+		Long:    "The profile is a built-in one: " + strings.Join(profile.Available(), ", ") + ".",
+		Args:    singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := boot(args[0], noPull, replace)
 			if err != nil {
@@ -126,16 +128,19 @@ func opencodeCommand() *cobra.Command {
 	return cmd
 }
 
-// profileArgs accepts exactly one profile name.
-func profileArgs(cmd *cobra.Command, args []string) error {
-	switch len(args) {
-	case 1:
+// singleArg accepts exactly one argument; any other count prints the command
+// help.
+func singleArg(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 {
 		return nil
-	case 0:
-		return fmt.Errorf("no profile given (expected one of %s)", strings.Join(profile.Available(), ", "))
-	default:
-		return fmt.Errorf("expected one profile, got %d", len(args))
 	}
+	return argHelpError(cmd)
+}
+
+// argHelpError prints a command's help and asks Run to exit with 1.
+func argHelpError(cmd *cobra.Command) error {
+	printHelp(cmd)
+	return exitCoder{code: 1}
 }
 
 // printHelp writes a command's help to its error output.
