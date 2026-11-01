@@ -3,6 +3,9 @@
 Motte provides profiles for isolated development environments for agentic development with the [OpenCode](https://opencode.ai) coding agent.
 Environments are isolated using [microsandbox](https://docs.microsandbox.dev) microVMs.
 
+Motte is under active development.
+Expect breaking changes in its commandline interface without a smooth migration path.
+
 ## Prerequisites
 
 A `motte` binary (see [Releases](https://github.com/woefe/motte/releases), or build one yourself with [Go](https://go.dev) 1.26 or newer).
