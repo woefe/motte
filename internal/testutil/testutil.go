@@ -6,8 +6,10 @@
 package testutil
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -76,6 +78,17 @@ func FakeEditor(t *testing.T) {
 	t.Helper()
 	t.Setenv("VISUAL", "true")
 	t.Setenv("EDITOR", "true")
+}
+
+// SwapLogger replaces the default slog logger with one writing to the
+// returned buffer, restoring the previous logger at cleanup.
+func SwapLogger(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	previous := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	return buf
 }
 
 // AssertAllowListed fails unless each target appears in the allow list.

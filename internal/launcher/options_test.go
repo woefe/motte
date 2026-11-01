@@ -230,33 +230,3 @@ func TestSecretModifySpecs(t *testing.T) {
 		t.Errorf("nil input produced %+v", none)
 	}
 }
-
-// TestCreateProgressRenderingSanity checks the humanized rendering helpers.
-func TestCreateProgressRenderingSanity(t *testing.T) {
-	// Regression: pull events arrive with a layer count but no layer index yet.
-	count := uint64(12)
-	line := creationProgressLine(m.CreationProgress{
-		Kind: "pull",
-		Progress: m.CreationProgressDetail{
-			Kind:       "layer_download_progress",
-			Reference:  "ghcr.io/woefe/motte/golang:latest",
-			LayerCount: &count,
-		},
-	})
-	if want := "downloading 0 B"; line != want {
-		t.Errorf("creationProgressLine = %q, want %q", line, want)
-	}
-	if got := humanBytes(1024); got != "1.0 KiB" {
-		t.Errorf("humanBytes(1024) = %q", got)
-	}
-	if got := humanBytes(1024 * 1024); got != "1.0 MiB" {
-		t.Errorf("humanBytes(1MiB) = %q", got)
-	}
-	if got := startupPhase("activating"); got != "activating sandbox" {
-		t.Errorf("startupPhase = %q", got)
-	}
-	total := uint64(2048)
-	if got := byteProgress(512, &total); got != "512 B / 2.0 KiB (25%)" {
-		t.Errorf("byteProgress = %q", got)
-	}
-}

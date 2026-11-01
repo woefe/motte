@@ -12,6 +12,11 @@ linters:
     - gocritic
     - modernize
     - dupl
+    - sloglint
+  settings:
+    sloglint:
+      static-msg: true
+      key-naming-case: snake
 
 formatters:
   enable:

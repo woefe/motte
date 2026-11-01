@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 
@@ -61,7 +62,7 @@ func Boot(profileName string, noPull, replace bool) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(os.Stderr, "motte: sandbox %s\n", name)
+	slog.Info("using sandbox", "name", name)
 
 	// Bridge this terminal to the profile's cmd workload; blocks until the
 	// workload exits.
@@ -70,10 +71,10 @@ func Boot(profileName string, noPull, replace bool) (int, error) {
 	// Stop always runs, even on attach errors; the named sandbox and its
 	// root disk persist across runs.
 	if err := sandbox.Stop(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: failed to stop sandbox: %v\n", err)
+		slog.Error("failed to stop sandbox", "error", err)
 	}
 	if err := sandbox.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: closing sandbox handle: %v\n", err)
+		slog.Warn("failed to close the sandbox handle", "error", err)
 	}
 	if attachErr != nil {
 		return 1, fmt.Errorf("attaching to %s: %w", name, attachErr)
@@ -116,7 +117,7 @@ type launchState struct {
 
 // openSandbox returns a live sandbox for name. With replace set it recreates
 // the VM; otherwise it reuses this directory's persisted VM when one exists and
-// creates it (streaming pull/boot progress) only when none does yet. The
+// creates it (logging pull/boot progress) only when none does yet. The
 // effective secrets are converged onto the sandbox config after create and on
 // every reuse, so drifted or migrated secrets are fixed per launch.
 func openSandbox(
@@ -202,8 +203,7 @@ func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, 
 			return err
 		}
 		if plan != nil {
-			fmt.Fprintf(os.Stderr,
-				"motte: sandbox %s is running; secret changes apply on its next start\n", name)
+			slog.Info("sandbox is running; secret changes apply on its next start", "name", name)
 		}
 		return nil
 	}
@@ -225,8 +225,7 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 	if !ok || stored == fingerprint {
 		return
 	}
-	fmt.Fprintf(os.Stderr,
-		"motte: the network policy changed since this VM was created; recreate it with --replace to apply it\n")
+	slog.Warn("the network policy changed since this VM was created; recreate it with --replace to apply it")
 }
 
 // modifySecrets builds and applies the convergence patch from the drift
@@ -239,18 +238,11 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 		return nil, nil
 	}
 	for _, envVar := range migrated {
-		fmt.Fprintf(os.Stderr,
-			"motte: migrating secret %s: the stored plaintext copy is replaced by a keychain-backed env reference\n",
-			envVar)
+		slog.Info("migrating the stored plaintext secret to a keychain-backed env reference", "secret", envVar)
 	}
 	if slices.Contains(remove, secrets.OpencodeSecretName) {
-		fmt.Fprintf(
-			os.Stderr,
-			"motte: removing the formerly built-in secret %s from sandbox %s; re-enable it with: motte secrets add (%s)\n",
-			secrets.OpencodeSecretName,
-			name,
-			secrets.OpencodeSecretName,
-		)
+		slog.Info("removing the formerly built-in secret from the sandbox; re-enable it with: motte secrets add",
+			"sandbox", name, "secret", secrets.OpencodeSecretName)
 	}
 	plan, err := modder.Modify(ctx, m.ModifyOptions{
 		Secrets:       secretModifySpecs(upsert),
@@ -263,12 +255,12 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 	return plan, nil
 }
 
-// reportModifications prints a one-line summary of an applied plan.
+// reportModifications logs a one-line summary of an applied plan.
 func reportModifications(plan *m.SandboxModificationPlan, name string) {
 	if plan == nil || len(plan.Changes) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "motte: sandbox %s reboots to apply %d secret change(s)\n", name, len(plan.Changes))
+	slog.Info("sandbox reboots to apply secret changes", "name", name, "changes", len(plan.Changes))
 }
 
 // resolveSecrets returns the effective secret set for a launch: scanned from
@@ -281,9 +273,8 @@ func resolveSecrets(p *profile.Profile) ([]secrets.Spec, error) {
 		return nil, err
 	}
 	if count, err := secrets.CountAll(); err == nil && count == 0 {
-		fmt.Fprintf(os.Stderr,
-			"motte: no secrets configured; store a key for OpenCode in the OS keychain with: motte secrets add (%s)\n",
-			secrets.OpencodeSecretName)
+		slog.Info("no secrets configured; store the OpenCode key in the OS keychain with: motte secrets add",
+			"secret", secrets.OpencodeSecretName)
 	}
 	var egress []string
 	for _, secret := range configured {
@@ -314,12 +305,13 @@ func unsetSecretEnv(specs []secrets.Spec) {
 	}
 }
 
-// createSandbox boots a new sandbox, streaming creation progress to stderr.
+// createSandbox boots a new sandbox, logging creation progress.
 func createSandbox(ctx context.Context, name string, opts []m.SandboxOption) (*m.Sandbox, error) {
+	slog.Info("creating sandbox", "name", name)
 	progress, results := m.CreateSandboxWithProgress(ctx, name, opts...)
-	displayDone := displayCreationProgress(progress)
+	logDone := logCreationProgress(progress)
 	result := <-results
-	<-displayDone
+	<-logDone
 	if result.Err != nil {
 		return nil, fmt.Errorf("creating sandbox %s: %w", name, result.Err)
 	}

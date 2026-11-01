@@ -30,7 +30,10 @@ tasks:
       # golangci-lint covers vet-style linters + formatting (see .golangci.yml).
       - golangci-lint run ./...
       - go test ./...
-      - go build -o /dev/null ./cmd/motte
+
+  build:
+    cmds:
+      - go build ./cmd/motte
 
   # Local builds for trying image changes without pushing: the images are
   # tagged with the same ghcr.io refs the profiles reference, so a subsequent

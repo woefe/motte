@@ -15,11 +15,13 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 
 	"github.com/woefe/motte/internal/cli"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	os.Exit(cli.Run(os.Args))
 }

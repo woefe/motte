@@ -29,6 +29,7 @@ Motte provides profiles for isolated development environments for agentic develo
 - Write markdown `.md` files one sentence per line
 - Run `go mod tidy` after adding new dependencies
 - Run `task lint` to lint, test, and verify changes
+- Use `log/slog` for logging: structured records to stderr via `slog.Info`/`Warn`/`Error`; prompts and command output stay on `fmt`
 - Use code comments sparsely. Comments should never describe old behavior, but only the current behavior.
 - If you have to explain too many details and cross references in comments think of a better design
 - The README must stay well readable for human end-users: prefer the `motte` binary in examples, and avoid technical internals such as source file references or build details

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -560,8 +561,8 @@ func ScanEffective(profileName string) ([]Spec, error) {
 		for _, envVar := range SortedNames(secrets) {
 			spec := secrets[envVar]
 			if idx, ok := winner[spec.EnvVar]; ok {
-				fmt.Fprintf(os.Stderr, "motte: secret %s is shadowed by the more specific %s\n",
-					effective[idx].Name, spec.Name)
+				slog.Warn("secret is shadowed by a more specific scope",
+					"secret", effective[idx].Name, "winner", spec.Name)
 				effective[idx] = spec
 				continue
 			}
