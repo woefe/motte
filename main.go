@@ -46,8 +46,7 @@ func run(args []string) int {
 	if err == nil {
 		return 0
 	}
-	var coded exitCoder
-	if errors.As(err, &coded) {
+	if coded, ok := errors.AsType[exitCoder](err); ok {
 		if coded.message != "" {
 			fmt.Fprintf(os.Stderr, "motte: %s\n", coded.message)
 		}

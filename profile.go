@@ -149,10 +149,10 @@ var baseAllow = []string{
 // only (see secrets.go).
 func base() *profile {
 	p := &profile{
-		cpus:      ptr(uint8(4)),
-		memoryMiB: ptr(uint32(4096)), // 4G
-		workdir:   ptr("/workspace"),
-		shell:     ptr("/bin/bash"),
+		cpus:      new(uint8(4)),
+		memoryMiB: new(uint32(4096)), // 4G
+		workdir:   new("/workspace"),
+		shell:     new("/bin/bash"),
 		// The directory motte was started in, resolved at launch.
 		mounts: []mountSpec{{hostPath: "./", guestPath: "/workspace"}},
 		cmd:    []string{"opencode"},
@@ -160,7 +160,7 @@ func base() *profile {
 			// Connectivity check: opencode version + llama /health.
 			"check": "opencode --version && curl -sf http://host.microsandbox.internal:9931/health && echo 'llama server reachable'",
 		},
-		network: &networkDoc{TLS: &tlsDoc{Enabled: ptr(true)}},
+		network: &networkDoc{TLS: &tlsDoc{Enabled: new(true)}},
 	}
 	p.extendAllow(baseAllow)
 	return p
@@ -232,9 +232,4 @@ func railsProfile() *profile {
 	// bundler: the compact index and gem downloads; jsbundling: npm registry.
 	p.extendAllow([]string{"rubygems.org", "index.rubygems.org", "registry.npmjs.org"})
 	return p
-}
-
-// ptr returns a pointer to v.
-func ptr[T any](v T) *T {
-	return &v
 }

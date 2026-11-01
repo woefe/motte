@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,9 +18,7 @@ type fakeStore struct{ items map[string]string }
 
 func newFakeStore(values map[string]string) *fakeStore {
 	items := make(map[string]string, len(values))
-	for account, value := range values {
-		items[account] = value
-	}
+	maps.Copy(items, values)
 	return &fakeStore{items: items}
 }
 

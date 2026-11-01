@@ -521,7 +521,7 @@ func defaultHeaderCatalog(leaf string) []string {
 // splitHosts splits a comma-separated host list.
 func splitHosts(entry string) []string {
 	var hosts []string
-	for _, host := range strings.Split(entry, ",") {
+	for host := range strings.SplitSeq(entry, ",") {
 		if host = strings.TrimSpace(host); host != "" {
 			hosts = append(hosts, host)
 		}
