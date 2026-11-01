@@ -38,50 +38,47 @@ func TestLabelScope(t *testing.T) {
 	}
 }
 
-// TestOpenCodeFlagParsing resolves the opencode command through both of its
-// names and parses its flags.
-func TestOpenCodeFlagParsing(t *testing.T) {
-	for _, name := range []string{"oc", "opencode"} {
-		t.Run(name, func(t *testing.T) {
-			root := newRootCommand()
-			cmd, rest, err := root.Find([]string{name, "golang", "--replace", "--no-pull"})
-			if err != nil {
-				t.Fatalf("Find: %v", err)
-			}
-			if cmd.Name() != "opencode" {
-				t.Fatalf("command = %q, want opencode", cmd.Name())
-			}
-			if err := cmd.ParseFlags(rest); err != nil {
-				t.Fatalf("ParseFlags: %v", err)
-			}
-			replace, _ := cmd.Flags().GetBool("replace")
-			noPull, _ := cmd.Flags().GetBool("no-pull")
-			if !replace || !noPull {
-				t.Errorf("replace=%v no-pull=%v, want both true", replace, noPull)
-			}
-			if got := cmd.Flags().Args(); len(got) != 1 || got[0] != "golang" {
-				t.Errorf("args = %v, want [golang]", got)
-			}
-		})
-	}
-}
-
-// TestOpenCodeBootsTheProfile checks that the command hands the profile and
-// its flags to the boot.
+// TestOpenCodeBootsTheProfile checks that both command names resolve and hand
+// the profile and their flags to the boot.
 func TestOpenCodeBootsTheProfile(t *testing.T) {
 	original := boot
 	t.Cleanup(func() { boot = original })
-	var gotProfile string
-	var gotNoPull, gotReplace bool
-	boot = func(profile string, noPull, replace bool) (int, error) {
-		gotProfile, gotNoPull, gotReplace = profile, noPull, replace
-		return 0, nil
+	tests := []struct {
+		name    string
+		args    []string
+		profile string
+		noPull  bool
+		replace bool
+	}{
+		{name: "oc", args: []string{"oc", "golang", "--replace"}, profile: "golang", replace: true},
+		{
+			name: "opencode", args: []string{"opencode", "web", "--no-pull", "--replace"},
+			profile: "web", noPull: true, replace: true,
+		},
 	}
-	if err := execute(t, "oc", "golang", "--replace"); err != nil {
-		t.Fatalf("execute: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotProfile string
+			var gotNoPull, gotReplace bool
+			boot = func(profile string, noPull, replace bool) (int, error) {
+				gotProfile, gotNoPull, gotReplace = profile, noPull, replace
+				return 0, nil
+			}
+			if err := execute(t, test.args...); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if gotProfile != test.profile || gotNoPull != test.noPull || gotReplace != test.replace {
+				t.Errorf("boot(%q, no-pull=%v, replace=%v), want (%q, no-pull=%v, replace=%v)",
+					gotProfile, gotNoPull, gotReplace, test.profile, test.noPull, test.replace)
+			}
+		})
 	}
-	if gotProfile != "golang" || !gotReplace || gotNoPull {
-		t.Errorf("boot(%q, no-pull=%v, replace=%v)", gotProfile, gotNoPull, gotReplace)
+
+	// The command takes exactly one profile.
+	for _, args := range [][]string{{"oc"}, {"oc", "golang", "web"}} {
+		if err := execute(t, args...); err == nil {
+			t.Errorf("execute(%v) = nil, want a usage error", args)
+		}
 	}
 }
 
@@ -152,14 +149,39 @@ func TestPoliciesCommandErrors(t *testing.T) {
 	}
 }
 
-// TestRunExitCodes checks the exit code run reports for a failing and a
-// succeeding command.
+// TestRunExitCodes checks the exit code run returns and what it prints for a
+// failing and a succeeding command.
 func TestRunExitCodes(t *testing.T) {
 	isolatedConfigDir(t)
-	if code := run([]string{"motte", "golang"}); code != 1 {
-		t.Errorf("run(golang) = %d, want 1", code)
+	tests := []struct {
+		name   string
+		args   []string
+		want   int
+		wantRe string // expected stderr substring
+	}{
+		{
+			name: "coded message", args: []string{"motte", "golang"},
+			want: 1, wantRe: `unknown command "golang"; did you mean "motte oc golang"`,
+		},
+		{
+			name: "usage error", args: []string{"motte", "policies", "ls", "a"},
+			want: 1, wantRe: "unknown command",
+		},
+		{name: "success", args: []string{"motte", "policies", "ls"}, want: 0},
 	}
-	if code := run([]string{"motte", "policies", "ls"}); code != 0 {
-		t.Errorf("run(policies ls) = %d, want 0", code)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var code int
+			_, stderr := captureOutput(t, func() { code = run(test.args) })
+			if code != test.want {
+				t.Errorf("run(%v) = %d, want %d", test.args, code, test.want)
+			}
+			if test.wantRe == "" {
+				return
+			}
+			if !strings.Contains(stderr, test.wantRe) {
+				t.Errorf("stderr = %q, want containing %q", stderr, test.wantRe)
+			}
+		})
 	}
 }

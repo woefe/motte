@@ -287,6 +287,11 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 			if config.Network.TLS == nil {
 				t.Error("Network.TLS not enabled")
 			}
+			// The fingerprint of the effective policy rides in the labels, so
+			// a reused VM can be told that its policy changed.
+			if got := config.Labels[policyLabelKey]; got != policyFingerprint(profile) {
+				t.Errorf("label %q = %q, want %q", policyLabelKey, got, policyFingerprint(profile))
+			}
 
 			// Secrets are never part of create options: values would persist
 			// plaintext in the durable sandbox config on the host. They are

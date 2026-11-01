@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,33 +22,6 @@ func writePolicyFile(t *testing.T, name, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// TestPolicyScopesMapToFiles maps the scopes to their files: global, one
-// profile, and the current directory's project file.
-func TestPolicyScopesMapToFiles(t *testing.T) {
-	isolatedConfigDir(t)
-	hash, err := dirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		target policyTarget
-		want   string
-	}{
-		{target: policyTarget{scope: scopePolicyGlobal}, want: "global.yaml"},
-		{target: policyTarget{scope: scopePolicyProfile, profile: "golang"}, want: "golang.yaml"},
-		{target: policyTarget{scope: scopePolicyProject, hash: hash}, want: hash + ".yaml"},
-	}
-	for _, test := range tests {
-		path, err := policyTargetPath(test.target)
-		if err != nil {
-			t.Fatalf("policyTargetPath: %v", err)
-		}
-		if filepath.Base(path) != test.want {
-			t.Errorf("path = %q, want %q", filepath.Base(path), test.want)
-		}
 	}
 }
 
@@ -131,26 +105,12 @@ func TestPolicyAllowExtendsAndDedups(t *testing.T) {
 		got[1] != "one.more.example.com" || got[2] != "project.example.com" {
 		t.Errorf("last entries = %v, want the global, profile, and project entries", got)
 	}
-	for _, entry := range []string{"*.github.com", "extra.example.com"} {
-		if n := countEntries(allow, entry); n != 1 {
-			t.Errorf("%q appears %d times, want once", entry, n)
-		}
-	}
+	// Cross-scope and built-in duplicates are dropped: the list stays unique.
+	assertAllowUnique(t, allow)
 	// 16 base + 5 golang extras + 3 unique user entries.
 	if len(allow) != 24 {
 		t.Errorf("allow len = %d, want 24", len(allow))
 	}
-}
-
-// countEntries counts exact occurrences of entry in allow.
-func countEntries(allow []string, entry string) int {
-	n := 0
-	for _, listed := range allow {
-		if listed == entry {
-			n++
-		}
-	}
-	return n
 }
 
 // TestPolicyAllowAbsentAndEmptyNoOps: no policy files, an empty file, and
@@ -255,73 +215,66 @@ func TestPolicyFingerprintChangesWithThePolicy(t *testing.T) {
 	}
 }
 
-// TestSandboxOptionsCarryThePolicyFingerprint puts the fingerprint into the
-// sandbox labels, so a reused VM can be compared with it.
-func TestSandboxOptionsCarryThePolicyFingerprint(t *testing.T) {
+// TestPolicyTemplate covers the scope-file skeletons: the entry comments, and
+// the project path only for the current directory's project scope.
+func TestPolicyTemplate(t *testing.T) {
 	isolatedConfigDir(t)
-	profile, err := loadProfile("golang")
+	global, err := policyTemplate(policyTarget{scope: scopePolicyGlobal})
 	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
+		t.Fatal(err)
 	}
-	opts, err := sandboxOptions(profile, false)
+	if !strings.Contains(global, "network:") || !strings.Contains(global, "rule grammar") {
+		t.Errorf("global template = %q, want the entry comments", global)
+	}
+	project, err := policyTemplate(policyTarget{scope: scopePolicyProject, hash: mustDirHash(t)})
 	if err != nil {
-		t.Fatalf("sandboxOptions: %v", err)
+		t.Fatal(err)
 	}
-	labels := applyOptions(opts).Labels
-	if got := labels[policyLabelKey]; got != policyFingerprint(profile) {
-		t.Errorf("label %q = %q, want %q", policyLabelKey, got, policyFingerprint(profile))
+	dir, err := projectPath()
+	if err != nil {
+		t.Fatalf("projectPath: %v", err)
+	}
+	if !strings.Contains(project, "Project path: "+dir) {
+		t.Errorf("project template = %q, want the current directory's path", project)
+	}
+	foreign, err := policyTemplate(policyTarget{scope: scopePolicyProject, hash: "1234567890ab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(foreign, "Project path:") {
+		t.Errorf("foreign template = %q, want no project path", foreign)
 	}
 }
 
-// TestPoliciesConfigureCreatesTheTemplate covers the configure command: it
-// creates a missing scope file from the template and validates it afterwards.
+// TestPoliciesConfigureCreatesTheTemplate covers the configure command: a
+// missing scope file is created from the template and validates afterwards,
+// for the global scope, this directory's project scope, and a foreign hash.
 func TestPoliciesConfigureCreatesTheTemplate(t *testing.T) {
 	isolatedConfigDir(t)
 	t.Setenv("VISUAL", "true")
 	t.Setenv("EDITOR", "true")
-	if err := runPoliciesConfigure("global"); err != nil {
-		t.Fatalf("runPoliciesConfigure: %v", err)
+	for _, scope := range []string{"global", "project", "1234567890ab"} {
+		if err := runPoliciesConfigure(scope); err != nil {
+			t.Fatalf("runPoliciesConfigure(%s): %v", scope, err)
+		}
 	}
-	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies", "global.yaml")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading the policy file: %v", err)
-	}
-	if !strings.Contains(string(content), "network:") {
-		t.Errorf("policy file = %q, want the template", string(content))
-	}
-	entries, err := readPolicyFile(path)
-	if err != nil {
-		t.Fatalf("readPolicyFile: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Errorf("entries = %v, want none", entries)
-	}
-}
-
-// TestPoliciesConfigureCreatesTheProjectTemplate covers the project scope: the
-// template names the directory the policy belongs to.
-func TestPoliciesConfigureCreatesTheProjectTemplate(t *testing.T) {
-	isolatedConfigDir(t)
-	t.Setenv("VISUAL", "true")
-	t.Setenv("EDITOR", "true")
-	if err := runPoliciesConfigure("project"); err != nil {
-		t.Fatalf("runPoliciesConfigure: %v", err)
-	}
-	path, err := policyTargetPath(policyTarget{scope: scopePolicyProject, hash: mustDirHash(t)})
-	if err != nil {
-		t.Fatalf("policyTargetPath: %v", err)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading the policy file: %v", err)
-	}
-	project, err := projectPath()
-	if err != nil {
-		t.Fatalf("projectPath: %v", err)
-	}
-	if !strings.Contains(string(content), "Project path: "+project) {
-		t.Errorf("policy file = %q, want the project path", string(content))
+	files := []string{"global.yaml", mustDirHash(t) + ".yaml", "1234567890ab.yaml"}
+	for _, name := range files {
+		path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies", name)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading the policy file: %v", err)
+		}
+		if !strings.Contains(string(content), "network:") {
+			t.Errorf("%s = %q, want the template", name, string(content))
+		}
+		entries, err := readPolicyFile(path)
+		if err != nil {
+			t.Fatalf("%s does not validate: %v", name, err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("%s entries = %v, want none", name, entries)
+		}
 	}
 }
 
@@ -352,64 +305,26 @@ func TestPoliciesConfigureRejectsAnInvalidFile(t *testing.T) {
 	}
 }
 
-// TestPoliciesConfigureRejectsAnUnknownScope rejects a scope that is neither
-// global, project, a profile, nor a project hash.
-func TestPoliciesConfigureRejectsAnUnknownScope(t *testing.T) {
-	isolatedConfigDir(t)
-	err := runPoliciesConfigure("bogus")
-	if err == nil || !strings.Contains(err.Error(), "unknown scope") {
-		t.Errorf("error = %v, want an unknown-scope error", err)
-	}
-}
-
-// TestPoliciesConfigureCreatesTheTemplateForAHash covers a project scope
-// addressed by hash: the template is created without a project path, since
-// motte cannot know that directory.
-func TestPoliciesConfigureCreatesTheTemplateForAHash(t *testing.T) {
-	isolatedConfigDir(t)
-	t.Setenv("VISUAL", "true")
-	t.Setenv("EDITOR", "true")
-	if err := runPoliciesConfigure("1234567890ab"); err != nil {
-		t.Fatalf("runPoliciesConfigure: %v", err)
-	}
-	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies", "1234567890ab.yaml")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading the policy file: %v", err)
-	}
-	if !strings.Contains(string(content), "project 1234567890ab") {
-		t.Errorf("policy file = %q, want the hash in the header", string(content))
-	}
-	if strings.Contains(string(content), "Project path:") {
-		t.Errorf("policy file = %q, want no project path for a foreign hash", string(content))
-	}
-}
-
-// TestLsScopes lists the scopes that have a file in a config tree, ordered:
-// global, the built-in profiles, then the projects sorted by hash.
-func TestLsScopes(t *testing.T) {
+// TestLsScopesSkipsNonScopeFiles lists only the files whose names are a scope:
+// a directory, a wrong extension, and an unknown name are all skipped, and a
+// config tree that does not exist yet holds no scopes. The order of the
+// scopes is pinned by the ls command tests.
+func TestLsScopesSkipsNonScopeFiles(t *testing.T) {
 	isolatedConfigDir(t)
 	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies")
-	for _, name := range []string{"global.yaml", "golang.yaml", "1234567890ab.yaml", "ffffffffffff.yaml", "bogus.yaml"} {
+	for _, name := range []string{"global.yaml", "golang.yaml", "1234567890ab.yaml", "bogus.yaml", "global.yml"} {
 		writePolicyFile(t, name, "")
+	}
+	if err := os.Mkdir(filepath.Join(root, "archive.yaml"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	scopes, err := lsScopes(root)
 	if err != nil {
 		t.Fatalf("lsScopes: %v", err)
 	}
-	want := []scopeArg{
-		{},
-		{profile: "golang"},
-		{hash: "1234567890ab"},
-		{hash: "ffffffffffff"},
-	}
-	if len(scopes) != len(want) {
-		t.Fatalf("scopes = %+v, want %+v", scopes, want)
-	}
-	for i := range want {
-		if scopes[i] != want[i] {
-			t.Errorf("scope %d = %+v, want %+v", i, scopes[i], want[i])
-		}
+	want := []scopeArg{{}, {profile: "golang"}, {hash: "1234567890ab"}}
+	if !slices.Equal(scopes, want) {
+		t.Errorf("scopes = %+v, want %+v", scopes, want)
 	}
 	if scopes, err = lsScopes(filepath.Join(root, "missing")); err != nil || scopes != nil {
 		t.Errorf("lsScopes(missing) = %+v %v, want none without an error", scopes, err)

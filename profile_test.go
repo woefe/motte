@@ -59,68 +59,23 @@ func builtinImages() map[string]string {
 	}
 }
 
-// TestBuiltinProfilesLoad loads every built-in profile and checks the shared
-// base plus the launch-time resolution: cwd-relative mounts and the static
-// sanity of the definitions.
+// TestBuiltinProfilesLoad loads every built-in profile and checks what only
+// the profile layer carries: the profile's own name and its egress policy.
+// The settings a launch applies are checked on the sandbox config in
+// TestSandboxOptionsTranslateProfile.
 func TestBuiltinProfilesLoad(t *testing.T) {
 	isolatedConfigDir(t)
-	images := builtinImages()
-	for name, image := range images {
+	for name := range builtinImages() {
 		t.Run(name, func(t *testing.T) {
 			profile, err := loadProfile(name)
 			if err != nil {
 				t.Fatalf("loadProfile(%s): %v", name, err)
 			}
-
-			// The base() settings compose with the profile's own overrides.
 			if profile.name != name {
 				t.Errorf("name = %q, want %q", profile.name, name)
 			}
-			if profile.image != image {
-				t.Errorf("image = %q, want %q", profile.image, image)
-			}
-			if profile.cpus == nil || *profile.cpus != 4 {
-				t.Errorf("cpus = %v", profile.cpus)
-			}
-			if profile.memoryMiB == nil || *profile.memoryMiB != 4096 {
-				t.Errorf("memoryMiB = %v", profile.memoryMiB)
-			}
-			if profile.workdir == nil || *profile.workdir != "/workspace" {
-				t.Errorf("workdir = %v", profile.workdir)
-			}
-			if profile.shell == nil || *profile.shell != "/bin/bash" {
-				t.Errorf("shell = %v", profile.shell)
-			}
-			if len(profile.cmd) != 1 || profile.cmd[0] != "opencode" {
-				t.Errorf("cmd = %v", profile.cmd)
-			}
-			if got, ok := profile.scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
-				t.Errorf("scripts.check = %q", got)
-			}
-			if profile.network == nil || profile.network.TLS == nil ||
-				profile.network.TLS.Enabled == nil || !*profile.network.TLS.Enabled {
-				t.Error("network.TLS not enabled from base")
-			}
-
-			// The mount source resolves cwd-relative: ./ is the directory motte
-			// started in.
-			if len(profile.mounts) != 1 {
-				t.Fatalf("mounts = %+v, want 1", profile.mounts)
-			}
-			mount := profile.mounts[0]
-			if mount.guestPath != "/workspace" {
-				t.Errorf("guestPath = %q", mount.guestPath)
-			}
-			if want := workingDir(t); mount.hostPath != want {
-				t.Errorf("hostPath = %q, want %q", mount.hostPath, want)
-			}
-			if mount.readonly {
-				t.Error("mount is readonly, want rw")
-			}
-
-			// The profile's own egress policy replaces the base's (base sets none),
-			// while TLS stays enabled.
-			if profile.network.Allow == nil || len(*profile.network.Allow) == 0 {
+			if profile.network == nil || profile.network.Allow == nil ||
+				len(*profile.network.Allow) == 0 {
 				t.Fatal("network.allow empty")
 			}
 			// Every profile extends the base policy; extras stay in their owning
@@ -146,16 +101,7 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			if len(*profile.network.Allow) != wantLen {
 				t.Errorf("allow len = %d, want %d", len(*profile.network.Allow), wantLen)
 			}
-			seen := make(map[string]bool, len(*profile.network.Allow))
-			for _, entry := range *profile.network.Allow {
-				if seen[entry] {
-					t.Errorf("allow has duplicate %q", entry)
-				}
-				seen[entry] = true
-			}
-
-			// Secrets are user-configured for the OS keychain, not part of
-			// the built-in profile; covered in secrets_test.go.
+			assertAllowUnique(t, *profile.network.Allow)
 		})
 	}
 }
@@ -168,6 +114,18 @@ func assertAllowListed(t *testing.T, allow []string, targets ...string) {
 			continue
 		}
 		t.Errorf("allow list misses %q; got %v", target, allow)
+	}
+}
+
+// assertAllowUnique fails when the allow list repeats an entry.
+func assertAllowUnique(t *testing.T, allow []string) {
+	t.Helper()
+	seen := make(map[string]bool, len(allow))
+	for _, entry := range allow {
+		if seen[entry] {
+			t.Errorf("allow has duplicate %q", entry)
+		}
+		seen[entry] = true
 	}
 }
 
