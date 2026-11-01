@@ -50,13 +50,17 @@ func Hint() string {
 }
 
 // WriteNewFile creates a config file with a rendered skeleton, making the
-// parent directory first.
+// parent directory first. The file mode is 0600 regardless of the umask:
+// the chmod call, unlike the create mode, bypasses it.
 func WriteNewFile(path, contents string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("setting the mode of %s: %w", path, err)
 	}
 	return nil
 }

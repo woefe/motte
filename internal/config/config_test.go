@@ -55,7 +55,7 @@ func TestWriteNewFileCreatesParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o644 {
-		t.Errorf("%s mode = %#o, want 0644", path, perm)
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("%s mode = %#o, want 0600", path, perm)
 	}
 }
