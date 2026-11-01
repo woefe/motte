@@ -1,53 +1,10 @@
 package main
 
 import (
-	"io"
-	"os"
 	"slices"
 	"strings"
 	"testing"
 )
-
-// workingDir returns the test process's working directory: the base the
-// launcher resolves relative mount sources against.
-func workingDir(t *testing.T) string {
-	t.Helper()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-	return wd
-}
-
-// isolatedConfigDir points XDG_CONFIG_HOME at a fresh temp dir so tests never
-// read a real ~/.config/motte.
-func isolatedConfigDir(t *testing.T) {
-	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-}
-
-// captureOutput runs f with stdout and stderr piped, and returns what was
-// printed on each. Only for outputs far below the pipe buffer.
-func captureOutput(t *testing.T, f func()) (stdout, stderr string) {
-	t.Helper()
-	originalStdout, originalStderr := os.Stdout, os.Stderr
-	stdoutReader, stdoutWriter, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stderrReader, stderrWriter, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout, os.Stderr = stdoutWriter, stderrWriter
-	f()
-	_ = stdoutWriter.Close()
-	_ = stderrWriter.Close()
-	os.Stdout, os.Stderr = originalStdout, originalStderr
-	stdoutData, _ := io.ReadAll(stdoutReader)
-	stderrData, _ := io.ReadAll(stderrReader)
-	return string(stdoutData), string(stderrData)
-}
 
 // builtinImages returns the image reference of every built-in profile.
 func builtinImages() map[string]string {
@@ -103,29 +60,6 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			}
 			assertAllowUnique(t, *profile.network.Allow)
 		})
-	}
-}
-
-// assertAllowListed fails unless each target appears in the allow list.
-func assertAllowListed(t *testing.T, allow []string, targets ...string) {
-	t.Helper()
-	for _, target := range targets {
-		if slices.Contains(allow, target) {
-			continue
-		}
-		t.Errorf("allow list misses %q; got %v", target, allow)
-	}
-}
-
-// assertAllowUnique fails when the allow list repeats an entry.
-func assertAllowUnique(t *testing.T, allow []string) {
-	t.Helper()
-	seen := make(map[string]bool, len(allow))
-	for _, entry := range allow {
-		if seen[entry] {
-			t.Errorf("allow has duplicate %q", entry)
-		}
-		seen[entry] = true
 	}
 }
 

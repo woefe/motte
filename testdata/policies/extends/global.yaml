@@ -1,0 +1,4 @@
+network:
+  allow:
+    - "extra.example.com"
+    - "*.github.com"
