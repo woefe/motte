@@ -6,7 +6,7 @@
 // widen egress, never trim it. The strict schema only accepts
 // `network.allow` entries in the CLI rule grammar; anything else fails the
 // launch, with the file path in the error.
-package main
+package policies
 
 import (
 	"bytes"
@@ -17,12 +17,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/woefe/motte/internal/config"
+	"github.com/woefe/motte/internal/profile"
 	"go.yaml.in/yaml/v3"
 )
 
-// policyLabelKey is the sandbox label that carries the network policy
+// LabelKey is the sandbox label that carries the network policy
 // fingerprint, so a reused VM can be told that its policy changed.
-const policyLabelKey = "motte.policy"
+const LabelKey = "motte.policy"
 
 // policyScope is the scope a policy file applies to.
 type policyScope int
@@ -33,9 +35,9 @@ const (
 	scopePolicyProject
 )
 
-// policyTarget is a resolved policy scope: the file it lives in and the
-// parts that identify it.
-type policyTarget struct {
+// Target is a resolved policy scope: the file it lives in and the parts that
+// identify it. Build one with TargetFromArg; the fields are opaque.
+type Target struct {
 	scope   policyScope
 	profile string
 	hash    string
@@ -51,9 +53,9 @@ type policyNetworkDoc struct {
 	Allow []string `yaml:"allow"`
 }
 
-// policyTargetPath maps a resolved scope to its policy file.
-func policyTargetPath(target policyTarget) (string, error) {
-	root, err := policiesDir()
+// TargetPath maps a resolved scope to its policy file.
+func TargetPath(target Target) (string, error) {
+	root, err := config.PoliciesDir()
 	if err != nil {
 		return "", err
 	}
@@ -69,47 +71,47 @@ func policyTargetPath(target policyTarget) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-// policyTargetFromArg maps a resolved configure argument to its policy target.
-func policyTargetFromArg(arg scopeArg) policyTarget {
+// TargetFromArg maps a resolved configure argument to its policy target.
+func TargetFromArg(arg config.ScopeArg) Target {
 	switch {
-	case arg.profile != "":
-		return policyTarget{scope: scopePolicyProfile, profile: arg.profile}
-	case arg.hash != "":
-		return policyTarget{scope: scopePolicyProject, hash: arg.hash}
+	case arg.Profile != "":
+		return Target{scope: scopePolicyProfile, profile: arg.Profile}
+	case arg.Hash != "":
+		return Target{scope: scopePolicyProject, hash: arg.Hash}
 	default:
-		return policyTarget{scope: scopePolicyGlobal}
+		return Target{scope: scopePolicyGlobal}
 	}
 }
 
-// policyTargets returns the scopes that apply to a profile launch, in merge
-// order: the global file, the profile's own file, and the current
-// directory's project file.
-func policyTargets(profileName string) ([]policyTarget, error) {
-	hash, err := dirHash()
+// targets returns the scopes that apply to a profile launch, in merge order:
+// the global file, the profile's own file, and the current directory's
+// project file.
+func targets(profileName string) ([]Target, error) {
+	hash, err := config.DirHash()
 	if err != nil {
 		return nil, err
 	}
-	return []policyTarget{
+	return []Target{
 		{scope: scopePolicyGlobal},
 		{scope: scopePolicyProfile, profile: profileName},
 		{scope: scopePolicyProject, hash: hash},
 	}, nil
 }
 
-// policyAllow returns the network.allow entries of the policy files that
-// apply to a profile launch. Missing files contribute nothing.
-func policyAllow(profileName string) ([]string, error) {
-	targets, err := policyTargets(profileName)
+// Allow returns the network.allow entries of the policy files that apply to a
+// profile launch. Missing files contribute nothing.
+func Allow(profileName string) ([]string, error) {
+	list, err := targets(profileName)
 	if err != nil {
 		return nil, err
 	}
 	var allow []string
-	for _, target := range targets {
-		path, err := policyTargetPath(target)
+	for _, target := range list {
+		path, err := TargetPath(target)
 		if err != nil {
 			return nil, err
 		}
-		entries, err := readPolicyFile(path)
+		entries, err := ReadPolicyFile(path)
 		if err != nil {
 			return nil, err
 		}
@@ -118,10 +120,10 @@ func policyAllow(profileName string) ([]string, error) {
 	return allow, nil
 }
 
-// readPolicyFile strictly decodes one policy file and returns its network
+// ReadPolicyFile strictly decodes one policy file and returns its network
 // allow entries. Entries are validated against the CLI rule grammar here so
 // failures name the file, not the sandbox creation.
-func readPolicyFile(path string) ([]string, error) {
+func ReadPolicyFile(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -147,7 +149,7 @@ func readPolicyFile(path string) ([]string, error) {
 	}
 	var allow []string
 	for _, entry := range doc.Network.Allow {
-		if _, err := parseAllowRule(entry); err != nil {
+		if _, err := ParseAllowRule(entry); err != nil {
 			return nil, fmt.Errorf("policy %s: %w", path, err)
 		}
 		allow = append(allow, entry)
@@ -155,13 +157,14 @@ func readPolicyFile(path string) ([]string, error) {
 	return allow, nil
 }
 
-// policyTemplate returns the commented skeleton of a new policy file. The
-// project scope of the current directory names the directory it belongs to,
-// so the file identifies its location.
-func policyTemplate(target policyTarget) (string, error) {
-	header := fmt.Sprintf("# motte network policy — %s\n#\n", labelScope(target.profile, target.hash, false))
-	if hash, err := dirHash(); err == nil && target.scope == scopePolicyProject && hash == target.hash {
-		path, err := projectPath()
+// Template returns the commented skeleton of a new policy file. The project
+// scope of the current directory names the directory it belongs to, so the
+// file identifies its location.
+func Template(target Target) (string, error) {
+	header := fmt.Sprintf("# motte network policy — %s\n#\n",
+		config.LabelScope(target.profile, target.hash, false))
+	if hash, err := config.DirHash(); err == nil && target.scope == scopePolicyProject && hash == target.hash {
+		path, err := config.ProjectPath()
 		if err != nil {
 			return "", err
 		}
@@ -177,19 +180,19 @@ network:
 `, nil
 }
 
-// policyFingerprint returns a short digest of the profile's effective
-// network policy. It rides along in a sandbox label, so a reused VM can be
-// told that the policy it was created with is no longer the current one.
-func policyFingerprint(p *profile) string {
+// Fingerprint returns a short digest of the profile's effective network
+// policy. It rides along in a sandbox label, so a reused VM can be told that
+// the policy it was created with is no longer the current one.
+func Fingerprint(p *profile.Profile) string {
 	digest := sha256.New()
-	if p.network != nil {
-		if p.network.Allow != nil {
-			for _, entry := range *p.network.Allow {
+	if p.Network != nil {
+		if p.Network.Allow != nil {
+			for _, entry := range *p.Network.Allow {
 				_, _ = fmt.Fprintf(digest, "%s\n", entry)
 			}
 		}
-		if p.network.TLS != nil && p.network.TLS.Enabled != nil {
-			_, _ = fmt.Fprintf(digest, "tls=%t\n", *p.network.TLS.Enabled)
+		if p.Network.TLS != nil && p.Network.TLS.Enabled != nil {
+			_, _ = fmt.Fprintf(digest, "tls=%t\n", *p.Network.TLS.Enabled)
 		}
 	}
 	return hex.EncodeToString(digest.Sum(nil)[:8])

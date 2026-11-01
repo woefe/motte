@@ -1,18 +1,9 @@
-// Command motte launches an OpenCode sandbox from a built-in profile.
-//
-// Usage:
-//
-//	motte opencode <base|golang|rails|web> [--no-pull] [--replace]
-//	motte policies ls
-//	motte policies configure <scope>
-//	motte secrets <add|set|configure|rm|ls>
-//
-// --no-pull skips the registry pull so a locally loaded image can win.
-// The VM is named after the directory you launch from and is reused across
-// runs; --replace recreates it instead. Secrets are managed with the secrets
-// subcommand and stored in the OS keychain. Behaviour and one-offs: see the
-// README.
-package main
+// The launcher: motte's boot flow. It assembles the effective profile (the
+// built-in definition with the user's network policy entries merged in),
+// resolves the keychain secrets, creates or reuses this directory's sandbox
+// via the microsandbox Go SDK, converges the sandbox's secrets onto the
+// desired set, and attaches the terminal to the profile's workload.
+package launcher
 
 import (
 	"context"
@@ -20,60 +11,34 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"strings"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
+	"github.com/woefe/motte/internal/config"
+	"github.com/woefe/motte/internal/policies"
+	"github.com/woefe/motte/internal/profile"
+	"github.com/woefe/motte/internal/secrets"
 )
 
-func main() {
-	os.Exit(run(os.Args))
-}
-
-// boot runs the profile's sandbox and returns the workload's exit code.
-// The command tree replaces it in tests.
-var boot = bootProfile
-
-// run dispatches the command tree and returns the exit code.
-func run(args []string) int {
-	root := newRootCommand()
-	root.SetArgs(args[1:])
-	root.SetOut(os.Stdout)
-	root.SetErr(os.Stderr)
-	err := root.Execute()
-	if err == nil {
-		return 0
-	}
-	if coded, ok := errors.AsType[exitCoder](err); ok {
-		if coded.message != "" {
-			fmt.Fprintf(os.Stderr, "motte: %s\n", coded.message)
-		}
-		return coded.ExitCode()
-	}
-	fmt.Fprintf(os.Stderr, "motte: %v\n", err)
-	return 1
-}
-
-// bootProfile launches the profile sandbox and returns the workload's exit
-// code.
-func bootProfile(profileName string, noPull, replace bool) (int, error) {
-	profile, err := loadProfile(profileName)
+// Boot launches the profile's sandbox and returns the workload's exit code.
+func Boot(profileName string, noPull, replace bool) (int, error) {
+	p, err := loadProfile(profileName)
 	if err != nil {
 		return 1, err
 	}
-	if len(profile.cmd) == 0 {
+	if len(p.Cmd) == 0 {
 		return 1, fmt.Errorf("profile %s has no cmd to attach to", profileName)
 	}
 
 	// Resolve the effective secrets from the OS keychain and feed them to the
 	// runtime via host env vars; the env vars are only needed until the
 	// sandbox booted.
-	secrets, err := resolveSecrets(profile)
+	resolved, err := resolveSecrets(p)
 	if err != nil {
 		return 1, err
 	}
-	defer unsetSecretEnv(secrets)
+	defer unsetSecretEnv(resolved)
 
-	opts, err := sandboxOptions(profile, noPull)
+	opts, err := sandboxOptions(p, noPull)
 	if err != nil {
 		return 1, err
 	}
@@ -90,8 +55,8 @@ func bootProfile(profileName string, noPull, replace bool) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fingerprint := policyFingerprint(profile)
-	state := launchState{secrets: secrets, policyFingerprint: fingerprint}
+	fingerprint := policies.Fingerprint(p)
+	state := launchState{secrets: resolved, policyFingerprint: fingerprint}
 	sandbox, err := openSandbox(ctx, name, opts, replace, state)
 	if err != nil {
 		return 1, err
@@ -116,11 +81,26 @@ func bootProfile(profileName string, noPull, replace bool) (int, error) {
 	return code, nil
 }
 
+// loadProfile returns the effective profile: the built-in definition with
+// the user's policy entries merged on top of the built-in egress policy.
+func loadProfile(name string) (*profile.Profile, error) {
+	p, err := profile.Load(name)
+	if err != nil {
+		return nil, err
+	}
+	extra, err := policies.Allow(name)
+	if err != nil {
+		return nil, err
+	}
+	p.ExtendAllow(extra)
+	return p, nil
+}
+
 // sandboxName returns the msb VM name for a profile in this directory: the
 // directory hash is prefixed to the profile name, so the VM persists per
 // directory instead of being recreated on every run.
 func sandboxName(profileName string) (string, error) {
-	hash, err := dirHash()
+	hash, err := config.DirHash()
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +110,7 @@ func sandboxName(profileName string) (string, error) {
 // launchState is the desired state of a launch: the resolved secrets and the
 // fingerprint of the effective network policy.
 type launchState struct {
-	secrets           []secretSpec
+	secrets           []secrets.Spec
 	policyFingerprint string
 }
 
@@ -195,11 +175,11 @@ type secretModder interface {
 // convergeAfterCreate applies secrets to a freshly created sandbox. The VM
 // booted without them, so the restart policy reboots it with the secrets in
 // place. The stored config of a fresh sandbox carries no secrets yet.
-func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, secrets []secretSpec) error {
-	if len(secrets) == 0 {
+func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, desired []secrets.Spec) error {
+	if len(desired) == 0 {
 		return nil
 	}
-	plan, err := modifySecrets(ctx, sandbox, sandbox.Name(), nil, secrets, m.ModificationPolicyRestart)
+	plan, err := modifySecrets(ctx, sandbox, sandbox.Name(), nil, desired, m.ModificationPolicyRestart)
 	if err != nil {
 		return err
 	}
@@ -211,7 +191,7 @@ func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, secrets []secr
 // and fixes drift: a stopped VM gets the persisted patch applied for its next
 // start; a running VM gets a note instead (its restart is left to the user).
 func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, state launchState) error {
-	stored, err := parseStoredSecrets(handle.ConfigJSON())
+	stored, err := secrets.ParseStored(handle.ConfigJSON())
 	if err != nil {
 		return fmt.Errorf("sandbox %s: %w", name, err)
 	}
@@ -241,7 +221,7 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 	if err != nil || config.Labels == nil {
 		return
 	}
-	stored, ok := config.Labels[policyLabelKey]
+	stored, ok := config.Labels[policies.LabelKey]
 	if !ok || stored == fingerprint {
 		return
 	}
@@ -251,10 +231,10 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 
 // modifySecrets builds and applies the convergence patch from the drift
 // between stored and desired secrets; it is a no-op without drift.
-func modifySecrets(ctx context.Context, modder secretModder, name string, stored []storedSecret,
-	secrets []secretSpec, policy m.ModificationPolicy,
+func modifySecrets(ctx context.Context, modder secretModder, name string, stored []secrets.Stored,
+	desired []secrets.Spec, policy m.ModificationPolicy,
 ) (*m.SandboxModificationPlan, error) {
-	upsert, remove, migrated := secretDrift(stored, secrets)
+	upsert, remove, migrated := secrets.Drift(stored, desired)
 	if len(upsert) == 0 && len(remove) == 0 {
 		return nil, nil
 	}
@@ -263,13 +243,13 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 			"motte: migrating secret %s: the stored plaintext copy is replaced by a keychain-backed env reference\n",
 			envVar)
 	}
-	if slices.Contains(remove, opencodeSecretName) {
+	if slices.Contains(remove, secrets.OpencodeSecretName) {
 		fmt.Fprintf(
 			os.Stderr,
 			"motte: removing the formerly built-in secret %s from sandbox %s; re-enable it with: motte secrets add (%s)\n",
-			opencodeSecretName,
+			secrets.OpencodeSecretName,
 			name,
-			opencodeSecretName,
+			secrets.OpencodeSecretName,
 		)
 	}
 	plan, err := modder.Modify(ctx, m.ModifyOptions{
@@ -295,42 +275,42 @@ func reportModifications(plan *m.SandboxModificationPlan, name string) {
 // the user's secret configs with precedence applied, validated, egress
 // extended with their allow entries, and values pulled from the keychain into
 // host env vars for the sandbox boot.
-func resolveSecrets(p *profile) ([]secretSpec, error) {
-	configured, err := scanEffectiveSecrets(p.name)
+func resolveSecrets(p *profile.Profile) ([]secrets.Spec, error) {
+	configured, err := secrets.ScanEffective(p.Name)
 	if err != nil {
 		return nil, err
 	}
-	if count, err := secretCountAll(); err == nil && count == 0 {
+	if count, err := secrets.CountAll(); err == nil && count == 0 {
 		fmt.Fprintf(os.Stderr,
 			"motte: no secrets configured; store a key for OpenCode in the OS keychain with: motte secrets add (%s)\n",
-			opencodeSecretName)
+			secrets.OpencodeSecretName)
 	}
 	var egress []string
 	for _, secret := range configured {
-		egress = append(egress, secret.allow...)
+		egress = append(egress, secret.Allow...)
 	}
-	p.extendAllow(egress)
+	p.ExtendAllow(egress)
 	for _, secret := range configured {
-		value, err := defaultSecretStore.get(secret.name)
-		if errors.Is(err, errSecretNotFound) {
+		value, err := secrets.DefaultStore.Get(secret.Name)
+		if errors.Is(err, secrets.ErrNotFound) {
 			return nil, fmt.Errorf(
 				"secret %s is not in the keychain — set it with: motte secrets set %s",
-				secret.name, secret.name)
+				secret.Name, secret.Name)
 		}
 		if err != nil {
 			return nil, err
 		}
-		if err := os.Setenv(secretHostEnvVar(secret.envVar), value); err != nil {
-			return nil, fmt.Errorf("exporting %s: %w", secretHostEnvVar(secret.envVar), err)
+		if err := os.Setenv(secrets.HostEnvVar(secret.EnvVar), value); err != nil {
+			return nil, fmt.Errorf("exporting %s: %w", secrets.HostEnvVar(secret.EnvVar), err)
 		}
 	}
 	return configured, nil
 }
 
 // unsetSecretEnv clears the host env vars secrets resolve through.
-func unsetSecretEnv(secrets []secretSpec) {
-	for _, secret := range secrets {
-		_ = os.Unsetenv(secretHostEnvVar(secret.envVar))
+func unsetSecretEnv(specs []secrets.Spec) {
+	for _, secret := range specs {
+		_ = os.Unsetenv(secrets.HostEnvVar(secret.EnvVar))
 	}
 }
 
@@ -344,155 +324,4 @@ func createSandbox(ctx context.Context, name string, opts []m.SandboxOption) (*m
 		return nil, fmt.Errorf("creating sandbox %s: %w", name, result.Err)
 	}
 	return result.Sandbox, nil
-}
-
-// displayCreationProgress renders sandbox-creation progress (image pull, VM
-// boot) to stderr as a single updating line while creation runs.
-// It returns a channel closed when the event stream ends.
-func displayCreationProgress(events <-chan m.CreationProgress) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if !isCharDevice(os.Stderr) {
-			for range events { // drain so telemetry never stalls creation
-			}
-			return
-		}
-		var last string
-		for event := range events {
-			line := creationProgressLine(event)
-			if line == "" || line == last {
-				continue
-			}
-			if pad := len(last) - len(line); pad > 0 {
-				line += strings.Repeat(" ", pad) // erase leftovers
-			}
-			fmt.Fprintf(os.Stderr, "\r%s", line)
-			last = line
-		}
-		if last != "" {
-			fmt.Fprintln(os.Stderr)
-		}
-	}()
-	return done
-}
-
-// creationProgressLine renders one creation event as a short status line.
-func creationProgressLine(event m.CreationProgress) string {
-	detail := event.Progress
-	switch event.Kind {
-	case "pull":
-		return pullProgressLine(detail)
-	case "startup":
-		line := startupPhase(detail.Phase)
-		if detail.TotalBytes != nil && *detail.TotalBytes > 0 {
-			line += fmt.Sprintf(" — %d / %d MiB", detail.CompletedBytes>>20, *detail.TotalBytes>>20)
-		}
-		return line
-	default:
-		return detail.Phase
-	}
-}
-
-// pullProgressLine renders one image-pull event.
-func pullProgressLine(d m.CreationProgressDetail) string {
-	layer := ""
-	// Early pull events carry a layer count but no layer index yet.
-	if d.LayerCount != nil && d.LayerIndex != nil && *d.LayerCount > 0 {
-		layer = fmt.Sprintf("layer %d/%d: ", *d.LayerIndex+1, *d.LayerCount)
-	}
-	switch d.Kind {
-	case "resolving":
-		return fmt.Sprintf("pulling %s: resolving", d.Reference)
-	case "resolved":
-		return fmt.Sprintf("pulling %s: %d layers", d.Reference, deref(d.LayerCount))
-	case "layer_download_progress":
-		return layer + "downloading " + byteProgress(d.DownloadedBytes, d.TotalBytes)
-	case "layer_download_verifying":
-		return layer + "verifying"
-	case "layer_download_complete":
-		return layer + "downloaded"
-	case "layer_materialize_started":
-		return layer + "materializing"
-	case "layer_materialize_progress":
-		return layer + "materializing " + byteProgress(d.BytesRead, d.TotalBytes)
-	case "layer_materialize_writing":
-		return layer + "writing erofs"
-	case "layer_materialize_complete":
-		return layer + "materialized"
-	case "stitch_merging_trees":
-		return "stitching: merging layers"
-	case "stitch_writing_fsmeta":
-		return "stitching: fsmeta"
-	case "stitch_writing_vmdk":
-		return "stitching: vmdk"
-	case "stitch_done":
-		return "pull complete"
-	default:
-		return ""
-	}
-}
-
-// startupPhase renders one VM startup phase.
-func startupPhase(phase string) string {
-	switch phase {
-	case "preparing_snapshot":
-		return "preparing sandbox"
-	case "waiting_for_memory_backing":
-		return "waiting for RAM backing"
-	case "preparing_memory_backing":
-		return "preparing RAM backing"
-	case "reusing_memory_backing":
-		return "reusing RAM backing"
-	case "syncing_memory_backing":
-		return "syncing RAM backing"
-	case "activating":
-		return "activating sandbox"
-	default:
-		return phase
-	}
-}
-
-// byteProgress renders completed of total bytes with a percentage.
-func byteProgress(done uint64, total *uint64) string {
-	if total == nil || *total == 0 {
-		return humanBytes(done)
-	}
-	return fmt.Sprintf("%s / %s (%d%%)", humanBytes(done), humanBytes(*total), done*100 / *total)
-}
-
-// humanBytes renders a byte count in binary units.
-func humanBytes(n uint64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	size := float64(n)
-	var suffix string
-	for size >= unit && suffix != "GiB" {
-		size /= unit
-		switch suffix {
-		case "":
-			suffix = "KiB"
-		case "KiB":
-			suffix = "MiB"
-		case "MiB":
-			suffix = "GiB"
-		}
-	}
-	return fmt.Sprintf("%.1f %s", size, suffix)
-}
-
-func deref[T any](v *T) T {
-	if v == nil {
-		var zero T
-		return zero
-	}
-	return *v
-}
-
-// isCharDevice reports whether f is a character device such as a terminal.
-func isCharDevice(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

@@ -1,23 +1,25 @@
-package main
+package config
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/woefe/motte/internal/testutil"
 )
 
 // TestMotteConfigTree pins the layout under the user config dir: one directory
 // per config family, holding one file per scope.
 func TestMotteConfigTree(t *testing.T) {
-	isolatedConfigDir(t)
+	testutil.IsolatedConfigDir(t)
 	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte")
 	tests := []struct {
 		dir  func() (string, error)
 		want string
 	}{
-		{dir: motteConfigDir, want: root},
-		{dir: policiesDir, want: filepath.Join(root, "policies")},
-		{dir: secretsDir, want: filepath.Join(root, "secrets")},
+		{dir: ConfigDir, want: root},
+		{dir: PoliciesDir, want: filepath.Join(root, "policies")},
+		{dir: SecretsDir, want: filepath.Join(root, "secrets")},
 	}
 	for _, test := range tests {
 		got, err := test.dir()
@@ -28,8 +30,8 @@ func TestMotteConfigTree(t *testing.T) {
 			t.Errorf("config dir = %q, want %q", got, test.want)
 		}
 	}
-	if got := motteConfigHint(); got != root {
-		t.Errorf("motteConfigHint = %q, want %q", got, root)
+	if got := Hint(); got != root {
+		t.Errorf("Hint = %q, want %q", got, root)
 	}
 }
 
@@ -39,8 +41,8 @@ func TestMotteConfigTree(t *testing.T) {
 func TestWriteNewFileCreatesParents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "deeper", "global.yaml")
 	const skeleton = "network:\n  allow: []\n"
-	if err := writeNewFile(path, skeleton); err != nil {
-		t.Fatalf("writeNewFile: %v", err)
+	if err := WriteNewFile(path, skeleton); err != nil {
+		t.Fatalf("WriteNewFile: %v", err)
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {

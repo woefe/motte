@@ -1,6 +1,6 @@
 // User configuration files: where a scope's file lives under motte's config
 // tree, and how motte creates, writes, and edits it.
-package main
+package config
 
 import (
 	"errors"
@@ -11,8 +11,13 @@ import (
 	"strings"
 )
 
-// motteConfigDir returns the root of motte's per-user config tree.
-func motteConfigDir() (string, error) {
+// ErrInvalidAfterEdit reports a scope file that fails to parse after the
+// editor exited. The caller exits non-zero without printing another line:
+// the configure flow already explained the failure.
+var ErrInvalidAfterEdit = errors.New("the scope file is invalid after editing")
+
+// ConfigDir returns the root of motte's per-user config tree.
+func ConfigDir() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("locating the user config dir: %w", err)
@@ -20,33 +25,33 @@ func motteConfigDir() (string, error) {
 	return filepath.Join(dir, "motte"), nil
 }
 
-// policiesDir returns the root of the per-user policy tree.
-func policiesDir() (string, error) { return motteSubdir("policies") }
+// PoliciesDir returns the root of the per-user policy tree.
+func PoliciesDir() (string, error) { return motteSubdir("policies") }
 
-// secretsDir returns the root of the per-user secrets config tree.
-func secretsDir() (string, error) { return motteSubdir("secrets") }
+// SecretsDir returns the root of the per-user secrets config tree.
+func SecretsDir() (string, error) { return motteSubdir("secrets") }
 
 // motteSubdir returns one of motte's config subdirectories.
 func motteSubdir(name string) (string, error) {
-	root, err := motteConfigDir()
+	root, err := ConfigDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(root, name), nil
 }
 
-// motteConfigHint names the user config dir in error messages.
-func motteConfigHint() string {
-	dir, err := motteConfigDir()
+// Hint names the user config dir in error messages.
+func Hint() string {
+	dir, err := ConfigDir()
 	if err != nil {
 		return filepath.Join("<user config dir>", "motte")
 	}
 	return dir
 }
 
-// writeNewFile creates a config file with a rendered skeleton, making the
+// WriteNewFile creates a config file with a rendered skeleton, making the
 // parent directory first.
-func writeNewFile(path, contents string) error {
+func WriteNewFile(path, contents string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
@@ -56,38 +61,38 @@ func writeNewFile(path, contents string) error {
 	return nil
 }
 
-// scopeFile is one scope's config file as the configure flow needs it: where
+// ScopeFile is one scope's config file as the configure flow needs it: where
 // it lives, the command to re-run when an edit breaks it, how to render its
 // skeleton, and how to read it back.
-type scopeFile struct {
-	path     string
-	fixCmd   string
-	template func() (string, error)
-	read     func() error
+type ScopeFile struct {
+	Path     string
+	FixCmd   string
+	Template func() (string, error)
+	Read     func() error
 }
 
-// configureScope opens a scope's config file in the editor, creating it from
-// its template when missing, and re-reads it afterwards. A file that fails to
-// parse after editing keeps its content and exits non-zero.
-func configureScope(f scopeFile) error {
-	if _, err := os.Stat(f.path); errors.Is(err, os.ErrNotExist) {
-		template, err := f.template()
+// ConfigureScope opens a scope's config file in the editor, creating it from
+// its template when missing, and re-reads it afterwards. A file that fails
+// to parse after editing keeps its content and exits non-zero.
+func ConfigureScope(f ScopeFile) error {
+	if _, err := os.Stat(f.Path); errors.Is(err, os.ErrNotExist) {
+		template, err := f.Template()
 		if err != nil {
 			return err
 		}
-		if err := writeNewFile(f.path, template); err != nil {
+		if err := WriteNewFile(f.Path, template); err != nil {
 			return err
 		}
 	}
-	if err := runEditor(f.path); err != nil {
+	if err := runEditor(f.Path); err != nil {
 		return err
 	}
-	if err := f.read(); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %s is invalid after editing: %v\n", f.path, err)
-		fmt.Fprintf(os.Stderr, "motte: fix it with `%s`\n", f.fixCmd)
-		return exitCoder{code: 1}
+	if err := f.Read(); err != nil {
+		fmt.Fprintf(os.Stderr, "motte: %s is invalid after editing: %v\n", f.Path, err)
+		fmt.Fprintf(os.Stderr, "motte: fix it with `%s`\n", f.FixCmd)
+		return ErrInvalidAfterEdit
 	}
-	fmt.Fprintf(os.Stderr, "motte: %s is valid\n", f.path)
+	fmt.Fprintf(os.Stderr, "motte: %s is valid\n", f.Path)
 	return nil
 }
 

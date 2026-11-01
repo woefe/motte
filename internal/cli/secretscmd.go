@@ -4,7 +4,7 @@
 // value); set replaces an existing secret's value; configure opens a scope's
 // file in $VISUAL/$EDITOR and re-validates it; rm deletes a secret after
 // confirmation; ls lists the secrets grouped by scope with keychain presence.
-package main
+package cli
 
 import (
 	"bufio"
@@ -17,12 +17,15 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/woefe/motte/internal/config"
+	"github.com/woefe/motte/internal/profile"
+	"github.com/woefe/motte/internal/secrets"
 	"golang.org/x/term"
 )
 
 // secretsCommand builds the `motte secrets` command tree.
 func secretsCommand() *cobra.Command {
-	secrets := &cobra.Command{
+	command := &cobra.Command{
 		Use:   "secrets",
 		Short: "manage keychain-backed secrets",
 		Long: "Secret values live only in the OS keychain; motte's YAML files hold the\n" +
@@ -32,14 +35,14 @@ func secretsCommand() *cobra.Command {
 			return exitCoder{code: 1}
 		},
 	}
-	secrets.AddCommand(
+	command.AddCommand(
 		secretsAddCommand(),
 		secretsSetCommand(),
 		secretsConfigureCommand(),
 		secretsRmCommand(),
 		secretsLsCommand(),
 	)
-	return secrets
+	return command
 }
 
 // secretsAddCommand creates or changes a secret interactively.
@@ -107,8 +110,8 @@ func secretsLsCommand() *cobra.Command {
 }
 
 // configureHintErr appends the configure command that repairs a scope file.
-func configureHintErr(key secretScopeKey, err error) error {
-	return fmt.Errorf("%w; fix it with `motte secrets configure %s`", err, key.configureArg())
+func configureHintErr(key secrets.ScopeKey, err error) error {
+	return fmt.Errorf("%w; fix it with `motte secrets configure %s`", err, key.ConfigureArg())
 }
 
 // runSecretsAdd interactively creates or changes a secret.
@@ -116,7 +119,7 @@ func runSecretsAdd() error {
 	if !isTerminal(os.Stdin) {
 		return fmt.Errorf(
 			"motte secrets add is interactive; run it in a terminal, or craft %s/secrets/*.yaml by hand and use `motte secrets set`",
-			motteConfigHint(),
+			config.Hint(),
 		)
 	}
 	return addSecret(bufio.NewReader(os.Stdin), os.Stdin)
@@ -138,29 +141,29 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 	if scope != "" {
 		parts = scope + "/" + leaf
 	}
-	name, err := parseSecretName(parts)
+	name, err := secrets.ParseName(parts)
 	if err != nil {
 		return err
 	}
-	key := scopeKeyOf(name)
-	configured, err := readSecretScope(key)
+	key := secrets.ScopeKeyOf(name)
+	configured, err := secrets.ReadScope(key)
 	if err != nil {
 		return configureHintErr(key, err)
 	}
-	spec, exists := configured[name.leaf]
+	spec, exists := configured[name.Leaf]
 	if !exists {
-		spec = secretSpec{
-			envVar:       name.leaf,
-			allow:        defaultAllowCatalog(name.leaf),
-			headerFields: defaultHeaderCatalog(name.leaf),
+		spec = secrets.Spec{
+			EnvVar:       name.Leaf,
+			Allow:        defaultAllowCatalog(name.Leaf),
+			HeaderFields: defaultHeaderCatalog(name.Leaf),
 		}
-		if spec.headerFields == nil {
-			spec.headerFields = defaultSecretHeaderFields
+		if spec.HeaderFields == nil {
+			spec.HeaderFields = secrets.DefaultHeaderFields
 		}
 	}
 	defaults := "none"
-	if len(spec.allow) > 0 {
-		defaults = strings.Join(spec.allow, ", ")
+	if len(spec.Allow) > 0 {
+		defaults = strings.Join(spec.Allow, ", ")
 	}
 	entry, err := promptLine(in,
 		fmt.Sprintf("allowed hosts, comma-separated (exact hosts or *.wildcards) [%s]: ", defaults))
@@ -168,20 +171,20 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 		return err
 	}
 	if entry != "" {
-		spec.allow = splitHosts(entry)
+		spec.Allow = splitHosts(entry)
 	}
-	if len(spec.allow) == 0 {
+	if len(spec.Allow) == 0 {
 		return fmt.Errorf("at least one allowed host is required")
 	}
-	for _, host := range spec.allow {
-		if err := validateSecretAllowEntry(host); err != nil {
+	for _, host := range spec.Allow {
+		if err := secrets.ValidateAllowEntry(host); err != nil {
 			return err
 		}
 	}
 
 	replaceValue := true
 	if exists {
-		if _, getErr := defaultSecretStore.get(name.full); getErr == nil {
+		if _, getErr := secrets.DefaultStore.Get(name.Full); getErr == nil {
 			replaceValue, err = confirmPrompt(in, "replace the keychain value? [y/N]: ", false)
 			if err != nil {
 				return err
@@ -197,11 +200,11 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 			return fmt.Errorf("an empty value is not a secret; aborting")
 		}
 		warnLargeValue(value)
-		if err := defaultSecretStore.set(name.full, value); err != nil {
+		if err := secrets.DefaultStore.Set(name.Full, value); err != nil {
 			return err
 		}
 	}
-	if err := writeSecretMeta(name, spec); err != nil {
+	if err := secrets.WriteMeta(name, spec); err != nil {
 		return err
 	}
 	verb := "updated"
@@ -209,7 +212,7 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 		verb = "stored"
 	}
 	fmt.Fprintf(os.Stderr, "motte: %s %s (%s); config at %s\n",
-		verb, name.full, scopeLabel(name), secretsConfigHint(name))
+		verb, name.Full, scopeLabel(name), secretsConfigHint(name))
 	return nil
 }
 
@@ -226,7 +229,7 @@ func promptSecretScope(in *bufio.Reader) (string, error) {
 	case "p", "profile":
 		return promptSecretProfile(in)
 	case "j", "proj", "project":
-		hash, err := dirHash()
+		hash, err := config.DirHash()
 		if err != nil {
 			return "", err
 		}
@@ -239,31 +242,31 @@ func promptSecretScope(in *bufio.Reader) (string, error) {
 
 // promptSecretProfile prompts for a built-in profile name.
 func promptSecretProfile(in *bufio.Reader) (string, error) {
-	names := availableProfiles()
+	names := profile.Available()
 	answer, err := promptLine(in, fmt.Sprintf("profile (%s): ", strings.Join(names, ", ")))
 	if err != nil {
 		return "", err
 	}
-	profile := strings.TrimSpace(answer)
-	if !slices.Contains(names, profile) {
-		return "", fmt.Errorf("%q is not a built-in profile (available: %s)", profile, strings.Join(names, ", "))
+	name := strings.TrimSpace(answer)
+	if !slices.Contains(names, name) {
+		return "", fmt.Errorf("%q is not a built-in profile (available: %s)", name, strings.Join(names, ", "))
 	}
-	return profile, nil
+	return name, nil
 }
 
 // runSecretsSet replaces an existing secret's keychain value.
 func runSecretsSet(nameArg string) error {
-	name, err := parseSecretName(nameArg)
+	name, err := secrets.ParseName(nameArg)
 	if err != nil {
 		return err
 	}
-	key := scopeKeyOf(name)
-	configured, err := readSecretScope(key)
+	key := secrets.ScopeKeyOf(name)
+	configured, err := secrets.ReadScope(key)
 	if err != nil {
 		return configureHintErr(key, err)
 	}
-	if _, ok := configured[name.leaf]; !ok {
-		return fmt.Errorf("secret %s is not configured; create it with `motte secrets add`", name.full)
+	if _, ok := configured[name.Leaf]; !ok {
+		return fmt.Errorf("secret %s is not configured; create it with `motte secrets add`", name.Full)
 	}
 	value, err := readSecretValue("value (input hidden): ", os.Stdout, os.Stdin)
 	if err != nil {
@@ -273,52 +276,57 @@ func runSecretsSet(nameArg string) error {
 		return fmt.Errorf("an empty value is not a secret; aborting")
 	}
 	warnLargeValue(value)
-	if err := defaultSecretStore.set(name.full, value); err != nil {
+	if err := secrets.DefaultStore.Set(name.Full, value); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "motte: set the keychain value for %s\n", name.full)
+	fmt.Fprintf(os.Stderr, "motte: set the keychain value for %s\n", name.Full)
 	return nil
 }
 
 // runSecretsConfigure opens a scope's secrets file in the editor, creating it
 // from the template when missing, and re-validates it afterwards.
 func runSecretsConfigure(scope string) error {
-	arg, err := resolveScopeArg(scope)
+	arg, err := config.ResolveScopeArg(scope)
 	if err != nil {
 		return err
 	}
-	key := scopeKeyFromArg(arg)
-	path, err := key.path()
+	key := secrets.ScopeKeyFromArg(arg)
+	path, err := key.Path()
 	if err != nil {
 		return err
 	}
-	return configureScope(scopeFile{
-		path:     path,
-		fixCmd:   fmt.Sprintf("motte secrets configure %s", scope),
-		template: func() (string, error) { return secretsTemplate(key) },
-		read:     func() error { _, err := readSecretScope(key); return err },
+	return config.ConfigureScope(config.ScopeFile{
+		Path:   path,
+		FixCmd: fmt.Sprintf("motte secrets configure %s", scope),
+		Template: func() (string, error) {
+			return secrets.Template(key)
+		},
+		Read: func() error {
+			_, err := secrets.ReadScope(key)
+			return err
+		},
 	})
 }
 
 // runSecretsRm deletes a secret's config and keychain value after asking.
 func runSecretsRm(nameArg string, force bool) error {
-	name, err := parseSecretName(nameArg)
+	name, err := secrets.ParseName(nameArg)
 	if err != nil {
 		return err
 	}
-	key := scopeKeyOf(name)
-	configured, err := readSecretScope(key)
+	key := secrets.ScopeKeyOf(name)
+	configured, err := secrets.ReadScope(key)
 	if err != nil {
 		return configureHintErr(key, err)
 	}
-	if _, ok := configured[name.leaf]; !ok {
-		return fmt.Errorf("secret %s is not configured", name.full)
+	if _, ok := configured[name.Leaf]; !ok {
+		return fmt.Errorf("secret %s is not configured", name.Full)
 	}
 	if !force && !isTerminal(os.Stdin) {
 		return fmt.Errorf("refusing to proceed without confirmation; rerun with -f in scripts")
 	}
 	confirmed, err := confirmPrompt(bufio.NewReader(os.Stdin),
-		fmt.Sprintf("delete %s and its keychain value? [y/N]: ", name.full), force)
+		fmt.Sprintf("delete %s and its keychain value? [y/N]: ", name.Full), force)
 	if err != nil {
 		return err
 	}
@@ -326,31 +334,31 @@ func runSecretsRm(nameArg string, force bool) error {
 		fmt.Fprintln(os.Stderr, "motte: aborted")
 		return nil
 	}
-	if err := defaultSecretStore.delete(name.full); err != nil {
+	if err := secrets.DefaultStore.Delete(name.Full); err != nil {
 		return err
 	}
-	if err := removeSecretMeta(name); err != nil {
+	if err := secrets.RemoveMeta(name); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "motte: removed %s\n", name.full)
+	fmt.Fprintf(os.Stderr, "motte: removed %s\n", name.Full)
 	return nil
 }
 
 // lsRow is one listed secret with its keychain state.
 type lsRow struct {
 	name     string // the full path-like name of the secret
-	spec     secretSpec
+	spec     secrets.Spec
 	keychain string // "yes", "no", or "?" on a store error
 }
 
 // runSecretsLs lists the secrets of the existing scope files, grouped by
 // scope, with keychain presence and the allowed hosts.
 func runSecretsLs() error {
-	root, err := secretsDir()
+	root, err := config.SecretsDir()
 	if err != nil {
 		return err
 	}
-	scopes, err := lsScopes(root)
+	scopes, err := config.LsScopes(root)
 	if err != nil {
 		return err
 	}
@@ -358,27 +366,27 @@ func runSecretsLs() error {
 		fmt.Fprintln(os.Stderr, "no secrets configured; create one with `motte secrets add`")
 		return nil
 	}
-	hash, hashErr := dirHash()
+	hash, hashErr := config.DirHash()
 	var rows []lsRow
 	for i, scope := range scopes {
 		if i > 0 {
 			fmt.Println()
 		}
-		key := scopeKeyFromArg(scope)
-		thisDir := hashErr == nil && scope.hash != "" && scope.hash == hash
-		fmt.Printf("%s:\n", labelScope(scope.profile, scope.hash, thisDir))
-		secrets, err := readSecretScope(key)
+		key := secrets.ScopeKeyFromArg(scope)
+		thisDir := hashErr == nil && scope.Hash != "" && scope.Hash == hash
+		fmt.Printf("%s:\n", config.LabelScope(scope.Profile, scope.Hash, thisDir))
+		configured, err := secrets.ReadScope(key)
 		if err != nil {
 			fmt.Printf("  <unreadable: %v>\n", err)
 			continue
 		}
 		var group []lsRow
-		for _, envVar := range sortedSecretNames(secrets) {
-			spec := secrets[envVar]
+		for _, envVar := range secrets.SortedNames(configured) {
+			spec := configured[envVar]
 			group = append(group, lsRow{
-				name:     spec.name,
+				name:     spec.Name,
 				spec:     spec,
-				keychain: probeKeychain(spec.name),
+				keychain: secrets.ProbeKeychain(spec.Name),
 			})
 		}
 		if len(group) == 0 {
@@ -407,7 +415,7 @@ func printLsGroup(group []lsRow) {
 	}
 	for _, row := range group {
 		fmt.Printf("  %-*s  keychain: %s  allow: %s\n",
-			width, row.name, row.keychain, strings.Join(row.spec.allow, ", "))
+			width, row.name, row.keychain, strings.Join(row.spec.Allow, ", "))
 	}
 }
 
@@ -416,7 +424,7 @@ func printLsGroup(group []lsRow) {
 func shadowNotes(rows []lsRow) []string {
 	count := map[string]int{}
 	for _, row := range rows {
-		count[row.spec.envVar]++
+		count[row.spec.EnvVar]++
 	}
 	var leaves []string
 	for leaf, n := range count {
@@ -492,7 +500,7 @@ func isTerminal(f *os.File) bool {
 
 // defaultAllowCatalog returns the egress allow defaults for known secrets.
 func defaultAllowCatalog(leaf string) []string {
-	if leaf == opencodeSecretName {
+	if leaf == secrets.OpencodeSecretName {
 		return []string{"*.opencode.ai"}
 	}
 	return nil
@@ -501,7 +509,7 @@ func defaultAllowCatalog(leaf string) []string {
 // defaultHeaderCatalog returns the header substitution defaults for known
 // secrets.
 func defaultHeaderCatalog(leaf string) []string {
-	if leaf == opencodeSecretName {
+	if leaf == secrets.OpencodeSecretName {
 		return []string{"authorization", "x-api-key"}
 	}
 	return nil
@@ -531,15 +539,15 @@ func warnLargeValue(value string) {
 }
 
 // scopeLabel renders a secret's scope for one-line notices.
-func scopeLabel(n secretName) string {
-	key := scopeKeyOf(n)
-	return labelScope(key.profile, key.hash, false)
+func scopeLabel(n secrets.Name) string {
+	key := secrets.ScopeKeyOf(n)
+	return config.LabelScope(key.Profile, key.Hash, false)
 }
 
 // secretsConfigHint names a secret's scope file for interactive messages.
-func secretsConfigHint(n secretName) string {
-	if path, err := scopeKeyOf(n).path(); err == nil {
+func secretsConfigHint(n secrets.Name) string {
+	if path, err := secrets.ScopeKeyOf(n).Path(); err == nil {
 		return path
 	}
-	return n.full
+	return n.Full
 }

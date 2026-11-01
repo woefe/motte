@@ -3,18 +3,20 @@
 // ls lists the existing policy files grouped by scope with their entries;
 // configure opens a scope's file in $VISUAL/$EDITOR and re-validates it
 // afterwards.
-package main
+package cli
 
 import (
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/woefe/motte/internal/config"
+	"github.com/woefe/motte/internal/policies"
 )
 
 // policiesCommand builds the `motte policies` command tree.
 func policiesCommand() *cobra.Command {
-	policies := &cobra.Command{
+	command := &cobra.Command{
 		Use:   "policies",
 		Short: "manage the user network policies",
 		Long: "Policies live in ~/.config/motte/policies, one file per scope:\n" +
@@ -24,8 +26,8 @@ func policiesCommand() *cobra.Command {
 			return exitCoder{code: 1}
 		},
 	}
-	policies.AddCommand(policiesLsCommand(), policiesConfigureCommand())
-	return policies
+	command.AddCommand(policiesLsCommand(), policiesConfigureCommand())
+	return command
 }
 
 // policiesLsCommand lists the policy files.
@@ -56,11 +58,11 @@ func policiesConfigureCommand() *cobra.Command {
 // runPoliciesLs lists the existing policy files grouped by scope, with the
 // entries of each file.
 func runPoliciesLs() error {
-	root, err := policiesDir()
+	root, err := config.PoliciesDir()
 	if err != nil {
 		return err
 	}
-	scopes, err := lsScopes(root)
+	scopes, err := config.LsScopes(root)
 	if err != nil {
 		return err
 	}
@@ -68,18 +70,18 @@ func runPoliciesLs() error {
 		fmt.Fprintln(os.Stderr, "no policies configured; create one with `motte policies configure global`")
 		return nil
 	}
-	hash, hashErr := dirHash()
+	hash, hashErr := config.DirHash()
 	for i, scope := range scopes {
 		if i > 0 {
 			fmt.Println()
 		}
-		thisDir := hashErr == nil && scope.hash != "" && scope.hash == hash
-		fmt.Printf("%s:\n", labelScope(scope.profile, scope.hash, thisDir))
-		path, err := policyTargetPath(policyTargetFromArg(scope))
+		thisDir := hashErr == nil && scope.Hash != "" && scope.Hash == hash
+		fmt.Printf("%s:\n", config.LabelScope(scope.Profile, scope.Hash, thisDir))
+		path, err := policies.TargetPath(policies.TargetFromArg(scope))
 		if err != nil {
 			return err
 		}
-		entries, err := readPolicyFile(path)
+		entries, err := policies.ReadPolicyFile(path)
 		switch {
 		case err != nil:
 			fmt.Printf("  <unreadable: %v>\n", err)
@@ -97,19 +99,24 @@ func runPoliciesLs() error {
 // runPoliciesConfigure opens a scope's policy file in the editor and
 // re-validates it afterwards.
 func runPoliciesConfigure(scope string) error {
-	arg, err := resolveScopeArg(scope)
+	arg, err := config.ResolveScopeArg(scope)
 	if err != nil {
 		return err
 	}
-	target := policyTargetFromArg(arg)
-	path, err := policyTargetPath(target)
+	target := policies.TargetFromArg(arg)
+	path, err := policies.TargetPath(target)
 	if err != nil {
 		return err
 	}
-	return configureScope(scopeFile{
-		path:     path,
-		fixCmd:   fmt.Sprintf("motte policies configure %s", scope),
-		template: func() (string, error) { return policyTemplate(target) },
-		read:     func() error { _, err := readPolicyFile(path); return err },
+	return config.ConfigureScope(config.ScopeFile{
+		Path:   path,
+		FixCmd: fmt.Sprintf("motte policies configure %s", scope),
+		Template: func() (string, error) {
+			return policies.Template(target)
+		},
+		Read: func() error {
+			_, err := policies.ReadPolicyFile(path)
+			return err
+		},
 	})
 }

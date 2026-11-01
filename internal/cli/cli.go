@@ -6,15 +6,20 @@
 //	motte secrets <add|set|configure|rm|ls>
 //
 // The tree is built with cobra; every command carries its own help. Errors
-// are printed by run in motte's own style, without cobra's usage dump.
-package main
+// are printed by Run in motte's own style, without cobra's usage dump.
+package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/woefe/motte/internal/config"
+	"github.com/woefe/motte/internal/launcher"
+	"github.com/woefe/motte/internal/profile"
 )
 
 // exitCoder is an error that carries the exit code motte exits with. An
@@ -28,6 +33,34 @@ func (e exitCoder) Error() string { return e.message }
 
 // ExitCode returns the exit code the command exits with.
 func (e exitCoder) ExitCode() int { return e.code }
+
+// boot runs the profile's sandbox and returns the workload's exit code.
+// The command tree replaces it in tests.
+var boot = launcher.Boot
+
+// Run dispatches the command tree and returns the exit code.
+func Run(args []string) int {
+	root := newRootCommand()
+	root.SetArgs(args[1:])
+	root.SetOut(os.Stdout)
+	root.SetErr(os.Stderr)
+	err := root.Execute()
+	if err == nil {
+		return 0
+	}
+	// The configure flow already explained the invalid file; exit silently.
+	if errors.Is(err, config.ErrInvalidAfterEdit) {
+		return 1
+	}
+	if coded, ok := errors.AsType[exitCoder](err); ok {
+		if coded.message != "" {
+			fmt.Fprintf(os.Stderr, "motte: %s\n", coded.message)
+		}
+		return coded.ExitCode()
+	}
+	fmt.Fprintf(os.Stderr, "motte: %v\n", err)
+	return 1
+}
 
 // newRootCommand builds the motte command tree.
 func newRootCommand() *cobra.Command {
@@ -57,7 +90,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return exitCoder{code: 1}
 	}
 	arg := args[0]
-	if slices.Contains(availableProfiles(), arg) {
+	if slices.Contains(profile.Available(), arg) {
 		return exitCoder{code: 1, message: fmt.Sprintf(
 			"unknown command %q; did you mean %q?", arg, "motte oc "+arg)}
 	}
@@ -99,7 +132,7 @@ func profileArgs(cmd *cobra.Command, args []string) error {
 	case 1:
 		return nil
 	case 0:
-		return fmt.Errorf("no profile given (expected one of %s)", strings.Join(availableProfiles(), ", "))
+		return fmt.Errorf("no profile given (expected one of %s)", strings.Join(profile.Available(), ", "))
 	default:
 		return fmt.Errorf("expected one profile, got %d", len(args))
 	}

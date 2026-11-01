@@ -1,10 +1,12 @@
-package main
+package cli
 
 import (
 	"errors"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/woefe/motte/internal/testutil"
 )
 
 // execute runs the command tree with args and returns the error it produced.
@@ -128,10 +130,10 @@ func TestPoliciesCommandErrors(t *testing.T) {
 	}
 }
 
-// TestRunExitCodes checks the exit code run returns and what it prints for a
+// TestRunExitCodes checks the exit code Run returns and what it prints for a
 // failing and a succeeding command.
 func TestRunExitCodes(t *testing.T) {
-	isolatedConfigDir(t)
+	testutil.IsolatedConfigDir(t)
 	tests := []struct {
 		name   string
 		args   []string
@@ -151,9 +153,9 @@ func TestRunExitCodes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var code int
-			_, stderr := captureOutput(t, func() { code = run(test.args) })
+			_, stderr := testutil.CaptureOutput(t, func() { code = Run(test.args) })
 			if code != test.want {
-				t.Errorf("run(%v) = %d, want %d", test.args, code, test.want)
+				t.Errorf("Run(%v) = %d, want %d", test.args, code, test.want)
 			}
 			if test.wantRe == "" {
 				return

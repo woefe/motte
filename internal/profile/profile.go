@@ -2,9 +2,10 @@
 //
 // base() carries the settings every profile shares; the profile constructors
 // overlay it field by field. The network allow entries keep the microsandbox
-// CLI rule-target grammar (see sdk.go); the SDK options built from them
-// behave like the CLI's.
-package main
+// CLI rule-target grammar (the policies package parses it); the SDK options
+// built from them behave like the CLI's. The user's policy files are merged
+// on top by the launcher.
+package profile
 
 import (
 	"fmt"
@@ -14,65 +15,62 @@ import (
 	"strings"
 )
 
-// profile is one resolved profile: a built-in definition with the mount
-// sources resolved against the directory motte was started in. Secrets are
-// not part of the profile; they come from the user's secret configs and the
-// OS keychain (see secrets.go).
-type profile struct {
-	name      string
-	image     string
-	cpus      *uint8
-	memoryMiB *uint32
-	workdir   *string
-	shell     *string
-	mounts    []mountSpec
-	cmd       []string
-	scripts   map[string]string
-	network   *networkDoc
+// Profile is one built-in profile with the mount sources resolved against
+// the directory motte was started in. Secrets are not part of the profile;
+// they come from the user's secret configs and the OS keychain (the secrets
+// package).
+type Profile struct {
+	Name      string
+	Image     string
+	CPUs      *uint8
+	MemoryMiB *uint32
+	Workdir   *string
+	Shell     *string
+	Mounts    []MountSpec
+	Cmd       []string
+	Scripts   map[string]string
+	Network   *NetworkDoc
 }
 
-// networkDoc is the network configuration: an allow list in the CLI rule
+// NetworkDoc is the network configuration: an allow list in the CLI rule
 // grammar (a non-empty list implies deny-by-default egress, like the CLI) and
 // the TLS interception toggle.
-type networkDoc struct {
+type NetworkDoc struct {
 	Allow *[]string `yaml:"-"`
-	TLS   *tlsDoc   `yaml:"-"`
+	TLS   *TLSDoc   `yaml:"-"`
 }
 
-// tlsDoc is the TLS interception toggle; enabled turns on interception with
+// TLSDoc is the TLS interception toggle; enabled turns on interception with
 // its defaults.
-type tlsDoc struct {
+type TLSDoc struct {
 	Enabled *bool
 }
 
-// mountSpec is one bind-mount declaration. hostPath may be relative and is
+// MountSpec is one bind-mount declaration. HostPath may be relative and is
 // resolved against the directory motte was started in at launch.
-type mountSpec struct {
-	hostPath  string
-	guestPath string
-	readonly  bool
-	noexec    bool
-	nosuid    bool
-	nodev     bool
+type MountSpec struct {
+	HostPath  string
+	GuestPath string
+	Readonly  bool
+	Noexec    bool
+	Nosuid    bool
+	Nodev     bool
 }
 
-// secretSpec is defined in secrets.go: one user-configured secret with its
-// keychain-backed value, allow list, and header fields.
-
 // builtins lists the profiles compiled into the binary.
-var builtins = map[string]func() *profile{
+var builtins = map[string]func() *Profile{
 	"base":   baseProfile,
 	"golang": golangProfile,
 	"rails":  railsProfile,
 	"web":    webProfile,
 }
 
-// loadProfile returns the built-in profile name with the launch-time parts
+// Load returns the built-in profile name with the launch-time parts
 // resolved: relative mount sources joined against the working directory.
-func loadProfile(name string) (*profile, error) {
+func Load(name string) (*Profile, error) {
 	build, ok := builtins[name]
 	if !ok {
-		names := availableProfiles()
+		names := Available()
 		return nil, fmt.Errorf("unknown profile %s (available: %s)", name, strings.Join(names, ", "))
 	}
 	cwd, err := os.Getwd()
@@ -80,19 +78,14 @@ func loadProfile(name string) (*profile, error) {
 		return nil, fmt.Errorf("resolving the working directory: %w", err)
 	}
 	p := build()
-	extra, err := policyAllow(name)
-	if err != nil {
-		return nil, err
-	}
-	p.extendAllow(extra)
 	if err := p.resolve(cwd); err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
-// availableProfiles returns the sorted built-in profile names.
-func availableProfiles() []string {
+// Available returns the sorted built-in profile names.
+func Available() []string {
 	names := make([]string, 0, len(builtins))
 	for name := range builtins {
 		names = append(names, name)
@@ -103,17 +96,17 @@ func availableProfiles() []string {
 
 // resolve fills the launch-time parts of the profile: it joins relative mount
 // sources with cwd. It rejects duplicate guest mount targets.
-func (p *profile) resolve(cwd string) error {
-	seen := make(map[string]bool, len(p.mounts))
-	for i := range p.mounts {
-		mount := &p.mounts[i]
-		if !filepath.IsAbs(mount.hostPath) {
-			mount.hostPath = filepath.Join(cwd, mount.hostPath)
+func (p *Profile) resolve(cwd string) error {
+	seen := make(map[string]bool, len(p.Mounts))
+	for i := range p.Mounts {
+		mount := &p.Mounts[i]
+		if !filepath.IsAbs(mount.HostPath) {
+			mount.HostPath = filepath.Join(cwd, mount.HostPath)
 		}
-		if seen[mount.guestPath] {
-			return fmt.Errorf("duplicate guest mount target %s", mount.guestPath)
+		if seen[mount.GuestPath] {
+			return fmt.Errorf("duplicate guest mount target %s", mount.GuestPath)
 		}
-		seen[mount.guestPath] = true
+		seen[mount.GuestPath] = true
 	}
 	return nil
 }
@@ -146,36 +139,36 @@ var baseAllow = []string{
 // base returns the settings every profile shares: resources, the workspace
 // mount, the base egress policy extended by every profile, TLS interception,
 // the connectivity check and the default cmd. Secrets are user-configured
-// only (see secrets.go).
-func base() *profile {
-	p := &profile{
-		cpus:      new(uint8(4)),
-		memoryMiB: new(uint32(4096)), // 4G
-		workdir:   new("/workspace"),
-		shell:     new("/bin/bash"),
+// only (the secrets package).
+func base() *Profile {
+	p := &Profile{
+		CPUs:      new(uint8(4)),
+		MemoryMiB: new(uint32(4096)), // 4G
+		Workdir:   new("/workspace"),
+		Shell:     new("/bin/bash"),
 		// The directory motte was started in, resolved at launch.
-		mounts: []mountSpec{{hostPath: "./", guestPath: "/workspace"}},
-		cmd:    []string{"opencode"},
-		scripts: map[string]string{
+		Mounts: []MountSpec{{HostPath: "./", GuestPath: "/workspace"}},
+		Cmd:    []string{"opencode"},
+		Scripts: map[string]string{
 			// Connectivity check: opencode version + llama /health.
 			"check": "opencode --version && curl -sf http://host.microsandbox.internal:9931/health && echo 'llama server reachable'",
 		},
-		network: &networkDoc{TLS: &tlsDoc{Enabled: new(true)}},
+		Network: &NetworkDoc{TLS: &TLSDoc{Enabled: new(true)}},
 	}
-	p.extendAllow(baseAllow)
+	p.ExtendAllow(baseAllow)
 	return p
 }
 
-// extendAllow widens the profile's egress policy with entries, skipping ones
+// ExtendAllow widens the profile's egress policy with entries, skipping ones
 // already on the list. The list is copied, so constructors never share a
 // backing array.
-func (p *profile) extendAllow(entries []string) {
-	if p.network == nil {
-		p.network = &networkDoc{}
+func (p *Profile) ExtendAllow(entries []string) {
+	if p.Network == nil {
+		p.Network = &NetworkDoc{}
 	}
 	var allow []string
-	if p.network.Allow != nil {
-		allow = append(allow, *p.network.Allow...)
+	if p.Network.Allow != nil {
+		allow = append(allow, *p.Network.Allow...)
 	}
 	for _, entry := range entries {
 		if slices.Contains(allow, entry) {
@@ -183,26 +176,26 @@ func (p *profile) extendAllow(entries []string) {
 		}
 		allow = append(allow, entry)
 	}
-	p.network.Allow = &allow
+	p.Network.Allow = &allow
 }
 
 // baseProfile extends base() with the bare base image: the shared tooling
 // only (opencode, mise, git, podman), no profile-specific toolchain, and the
 // shared egress policy without extras.
-func baseProfile() *profile {
+func baseProfile() *Profile {
 	p := base()
-	p.name = "base"
-	p.image = "ghcr.io/woefe/motte/base:latest"
+	p.Name = "base"
+	p.Image = "ghcr.io/woefe/motte/base:latest"
 	return p
 }
 
 // golangProfile extends base() with the golang image and the Go toolchain's
 // egress policy.
-func golangProfile() *profile {
+func golangProfile() *Profile {
 	p := base()
-	p.name = "golang"
-	p.image = "ghcr.io/woefe/motte/golang:latest"
-	p.extendAllow([]string{
+	p.Name = "golang"
+	p.Image = "ghcr.io/woefe/motte/golang:latest"
+	p.ExtendAllow([]string{
 		"go.dev",
 		"dl.google.com",
 		"proxy.golang.org",
@@ -214,22 +207,22 @@ func golangProfile() *profile {
 
 // webProfile extends base() with the web image and the node toolchain's
 // egress policy.
-func webProfile() *profile {
+func webProfile() *Profile {
 	p := base()
-	p.name = "web"
-	p.image = "ghcr.io/woefe/motte/web:latest"
+	p.Name = "web"
+	p.Image = "ghcr.io/woefe/motte/web:latest"
 	// node: npm registry.
-	p.extendAllow([]string{"registry.npmjs.org"})
+	p.ExtendAllow([]string{"registry.npmjs.org"})
 	return p
 }
 
 // railsProfile extends base() with the rails image and the Ruby toolchain's
 // egress policy.
-func railsProfile() *profile {
+func railsProfile() *Profile {
 	p := base()
-	p.name = "rails"
-	p.image = "ghcr.io/woefe/motte/rails:latest"
+	p.Name = "rails"
+	p.Image = "ghcr.io/woefe/motte/rails:latest"
 	// bundler: the compact index and gem downloads; jsbundling: npm registry.
-	p.extendAllow([]string{"rubygems.org", "index.rubygems.org", "registry.npmjs.org"})
+	p.ExtendAllow([]string{"rubygems.org", "index.rubygems.org", "registry.npmjs.org"})
 	return p
 }

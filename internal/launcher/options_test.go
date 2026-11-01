@@ -1,21 +1,17 @@
-package main
+package launcher
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
+	"github.com/woefe/motte/internal/policies"
+	"github.com/woefe/motte/internal/profile"
+	"github.com/woefe/motte/internal/secrets"
+	"github.com/woefe/motte/internal/testutil"
 )
-
-// dnsRule is the expansion every plain dns entry shares.
-var dnsRule = m.PolicyRule{
-	Action:      m.PolicyActionAllow,
-	Direction:   m.PolicyDirectionEgress,
-	Destination: "host",
-	Protocols:   []m.PolicyProtocol{m.PolicyProtocolUDP, m.PolicyProtocolTCP},
-	Port:        "53",
-}
 
 // assertFindRule finds a rule by destination and, when ports is non-empty, by
 // that port, then compares it field by field. The dns and host:tcp:9931
@@ -30,93 +26,30 @@ func assertFindRule(t *testing.T, rules []m.PolicyRule, want m.PolicyRule, ports
 		if ports != "" && got.Port != ports && !slices.Contains(got.Ports, ports) {
 			continue
 		}
-		assertRule(t, got, want)
+		testutil.AssertRule(t, got, want)
 		return
 	}
 	t.Fatalf("rules lack a %q entry (port %q)", want.Destination, ports)
 }
 
-// assertRule compares rules field by field; PolicyRule holds slices and
-// is not comparable with ==.
-func assertRule(t *testing.T, got, want m.PolicyRule) {
-	t.Helper()
-	if got.Action != want.Action || got.Direction != want.Direction || got.Destination != want.Destination {
-		t.Errorf("rule = {action %v, direction %v, destination %q}, want {%v %v %q}",
-			got.Action, got.Direction, got.Destination, want.Action, want.Direction, want.Destination)
+// applyOptions folds sandbox options into a config, for assertions.
+func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
+	config := m.SandboxConfig{}
+	for _, opt := range opts {
+		opt(&config)
 	}
-	if len(got.Protocols) != len(want.Protocols) {
-		t.Fatalf("protocols = %v, want %v", got.Protocols, want.Protocols)
-	}
-	for i := range want.Protocols {
-		if got.Protocols[i] != want.Protocols[i] {
-			t.Errorf("protocols = %v, want %v", got.Protocols, want.Protocols)
-		}
-	}
-	if got.Port != want.Port || len(got.Ports) != len(want.Ports) {
-		t.Errorf("ports = {port %q, ports %v}, want {%q %v}", got.Port, got.Ports, want.Port, want.Ports)
-	}
+	return config
 }
 
-func TestParseAllowRule(t *testing.T) {
-	allowEgress := func(destination string) *m.PolicyRule {
-		return &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: destination}
+// workingDir returns the test process's working directory: the base the
+// launcher resolves relative mount sources against.
+func workingDir(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
 	}
-	allowTCP := func(destination string, ports ...string) *m.PolicyRule {
-		rule := allowEgress(destination)
-		rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolTCP}
-		rule.Ports = ports
-		return rule
-	}
-	tests := []struct {
-		entry  string
-		want   *m.PolicyRule
-		wantRe string // expected error substring
-	}{
-		{entry: "dns", want: &dnsRule},
-		{entry: "dns:any", want: &dnsRule},
-		{entry: "dns:any:53", want: &dnsRule},
-		{entry: "dns:tcp", want: &m.PolicyRule{
-			Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
-			Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Port: "53",
-		}},
-		{entry: "dns:udp:5353", wantRe: "fixed to port 53"},
-		{entry: "dns:sctp", wantRe: "supports"},
-		{entry: "dns:x:y:z", wantRe: "trailing"},
-		{entry: "*.github.com", want: allowEgress(".github.com")},
-		{entry: "go.dev", want: allowEgress("go.dev")},
-		{entry: "host:tcp:9931", want: allowTCP("host", "9931")},
-		{entry: "public", want: allowEgress("public")},
-		{entry: "meta", want: allowEgress("metadata")},
-		{entry: "any", want: allowEgress("*")},
-		{entry: "10.0.0.0/8", want: allowEgress("10.0.0.0/8")},
-		{entry: "1.1.1.1", want: allowEgress("1.1.1.1")},
-		{entry: "[2001:db8::1]", want: allowEgress("2001:db8::1")},
-		{entry: "[2001:db8::/32]", want: allowEgress("2001:db8::/32")},
-		{entry: "[2001:db8::1]:tcp:443", want: allowTCP("2001:db8::1", "443")},
-		{entry: "[192.168.0.1]", wantRe: "IPv6"},
-		{entry: "[unclosed", wantRe: "unclosed"},
-		{entry: "example.com:443", wantRe: "did you mean"},
-		{entry: "public:tcp:99999", wantRe: "invalid port"},
-		{entry: "public:tcp:443-80", wantRe: "lo must be <= hi"},
-		{entry: "public:tcp:8000-9000", want: allowTCP("public", "8000-9000")},
-		{entry: "example.com:fast", wantRe: "not a recognized protocol"},
-		{entry: "example:tcp", wantRe: "ambiguous"},
-		{entry: "weird:host:tcp:53", wantRe: "trailing"},
-	}
-	for _, test := range tests {
-		got, err := parseAllowRule(test.entry)
-		if test.wantRe != "" {
-			if err == nil || !strings.Contains(err.Error(), test.wantRe) {
-				t.Errorf("parseAllowRule(%q) error = %v, want containing %q", test.entry, err, test.wantRe)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("parseAllowRule(%q) = %v", test.entry, err)
-			continue
-		}
-		assertRule(t, got, *test.want)
-	}
+	return wd
 }
 
 func TestNetworkConfig(t *testing.T) {
@@ -124,7 +57,7 @@ func TestNetworkConfig(t *testing.T) {
 	allowList := []string{"dns", "*.github.com"}
 
 	// No allow list: the runtime's default policy, with TLS when enabled.
-	config, err := networkConfig(&networkDoc{TLS: &tlsDoc{Enabled: &enabled}})
+	config, err := networkConfig(&profile.NetworkDoc{TLS: &profile.TLSDoc{Enabled: &enabled}})
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -136,7 +69,7 @@ func TestNetworkConfig(t *testing.T) {
 	}
 
 	// An explicit empty allow list resolves to the default public profile.
-	config, err = networkConfig(&networkDoc{Allow: &[]string{}})
+	config, err = networkConfig(&profile.NetworkDoc{Allow: &[]string{}})
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -157,7 +90,7 @@ func TestNetworkConfig(t *testing.T) {
 	}
 
 	// A non-empty allow list is an egress allowlist with translated rules.
-	config, err = networkConfig(&networkDoc{Allow: &allowList, TLS: &tlsDoc{Enabled: &enabled}})
+	config, err = networkConfig(&profile.NetworkDoc{Allow: &allowList, TLS: &profile.TLSDoc{Enabled: &enabled}})
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -167,8 +100,8 @@ func TestNetworkConfig(t *testing.T) {
 	if len(config.Rules) != 2 {
 		t.Fatalf("rules = %+v, want 2", config.Rules)
 	}
-	assertRule(t, config.Rules[0], dnsRule)
-	assertRule(t, config.Rules[1], m.PolicyRule{
+	testutil.AssertRule(t, config.Rules[0], testutil.DNSRule)
+	testutil.AssertRule(t, config.Rules[1], m.PolicyRule{
 		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
 	})
 	if config.TLS == nil {
@@ -176,24 +109,15 @@ func TestNetworkConfig(t *testing.T) {
 	}
 }
 
-// applyOptions folds sandbox options into a config, for assertions.
-func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
-	config := m.SandboxConfig{}
-	for _, opt := range opts {
-		opt(&config)
-	}
-	return config
-}
-
 func TestSandboxOptionsTranslateProfile(t *testing.T) {
-	for name, image := range builtinImages() {
+	for name, image := range testutil.BuiltinImages() {
 		t.Run(name, func(t *testing.T) {
-			isolatedConfigDir(t)
-			profile, err := loadProfile(name)
+			testutil.IsolatedConfigDir(t)
+			p, err := loadProfile(name)
 			if err != nil {
 				t.Fatalf("loadProfile: %v", err)
 			}
-			opts, err := sandboxOptions(profile, false)
+			opts, err := sandboxOptions(p, false)
 			if err != nil {
 				t.Fatalf("sandboxOptions: %v", err)
 			}
@@ -237,12 +161,12 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 				t.Fatalf("Network = %+v", config.Network)
 			}
 			// One rule per allow entry, in declared order.
-			if len(config.Network.Rules) != len(*profile.network.Allow) {
-				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*profile.network.Allow))
+			if len(config.Network.Rules) != len(*p.Network.Allow) {
+				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*p.Network.Allow))
 			}
 			// Spot-check the rule kinds every profile uses: the semantic dns
 			// target, a domain suffix, and a host port.
-			assertFindRule(t, config.Network.Rules, dnsRule, "53")
+			assertFindRule(t, config.Network.Rules, testutil.DNSRule, "53")
 			assertFindRule(t, config.Network.Rules, m.PolicyRule{
 				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
 			}, "")
@@ -255,13 +179,13 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 			}
 			// The fingerprint of the effective policy rides in the labels, so
 			// a reused VM can be told that its policy changed.
-			if got := config.Labels[policyLabelKey]; got != policyFingerprint(profile) {
-				t.Errorf("label %q = %q, want %q", policyLabelKey, got, policyFingerprint(profile))
+			if got := config.Labels[policies.LabelKey]; got != policies.Fingerprint(p) {
+				t.Errorf("label %q = %q, want %q", policies.LabelKey, got, policies.Fingerprint(p))
 			}
 
 			// Secrets are never part of create options: values would persist
 			// plaintext in the durable sandbox config on the host. They are
-			// applied as post-create modify entries instead (see main.go).
+			// applied as post-create modify entries instead.
 			if len(config.Secrets) != 0 {
 				t.Fatalf("Secrets = %+v, want none", config.Secrets)
 			}
@@ -270,17 +194,40 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 }
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
-	isolatedConfigDir(t)
-	profile, err := loadProfile("golang")
+	testutil.IsolatedConfigDir(t)
+	p, err := loadProfile("golang")
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}
-	opts, err := sandboxOptions(profile, true)
+	opts, err := sandboxOptions(p, true)
 	if err != nil {
 		t.Fatalf("sandboxOptions: %v", err)
 	}
 	if got := applyOptions(opts).PullPolicy; got != m.PullPolicyDefault {
 		t.Errorf("PullPolicy = %q, want the default (pull if missing)", got)
+	}
+}
+
+// TestSecretModifySpecs builds modify entries with env references only.
+func TestSecretModifySpecs(t *testing.T) {
+	specs := secretModifySpecs([]secrets.Spec{
+		{EnvVar: "a_key", Allow: []string{"a.example.com"}, HeaderFields: []string{"authorization"}},
+	})
+	spec, ok := specs["a_key"]
+	if !ok {
+		t.Fatalf("specs = %+v, want a_key", specs)
+	}
+	if spec.Env != "MOTTE_SECRET_a_key" || spec.Value != "" || spec.Store != "" {
+		t.Errorf("spec = %+v, want env-only material", spec)
+	}
+	if len(spec.AllowedHosts) != 1 || spec.AllowedHosts[0] != "a.example.com" {
+		t.Errorf("AllowedHosts = %v", spec.AllowedHosts)
+	}
+	if spec.Substitution == nil || len(spec.Substitution.HeaderFields) != 1 {
+		t.Errorf("Substitution = %+v", spec.Substitution)
+	}
+	if none := secretModifySpecs(nil); len(none) != 0 {
+		t.Errorf("nil input produced %+v", none)
 	}
 }
 

@@ -10,7 +10,7 @@
 // and <hash>/NAME (project, the current directory). The settings of a scope
 // live in one file under $XDG_CONFIG_HOME/motte/secrets: global.yaml,
 // <profile>.yaml, and <hash>.yaml.
-package main
+package secrets
 
 import (
 	"bytes"
@@ -25,6 +25,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/woefe/motte/internal/config"
+	"github.com/woefe/motte/internal/profile"
 	kr "github.com/zalando/go-keyring"
 	"go.yaml.in/yaml/v3"
 )
@@ -37,185 +39,185 @@ const (
 	secretHostVarPrefix = "MOTTE_SECRET_"
 )
 
-// defaultSecretHeaderFields is used when a secret entry omits them.
-var defaultSecretHeaderFields = []string{"authorization"}
+// DefaultHeaderFields is used when a secret entry omits them.
+var DefaultHeaderFields = []string{"authorization"}
 
-// opencodeSecretName is the secret motte hints at and migrates from older
+// OpencodeSecretName is the secret motte hints at and migrates from older
 // sandboxes.
-const opencodeSecretName = "OPENCODE_GO_KEY"
+const OpencodeSecretName = "OPENCODE_GO_KEY"
 
-// errSecretNotFound reports a missing keychain entry.
-var errSecretNotFound = errors.New("secret not found")
+// ErrNotFound reports a missing keychain entry.
+var ErrNotFound = errors.New("secret not found")
 
-// secretSpec is one effective secret: its full path-like name, the guest env
-// var the placeholder appears under, and the substitution policy. The value
+// Spec is one effective secret: its full path-like name, the guest env var
+// the placeholder appears under, and the substitution policy. The value
 // arrives separately, via the keychain.
-type secretSpec struct {
-	name         string
-	envVar       string
-	allow        []string
-	headerFields []string
+type Spec struct {
+	Name         string
+	EnvVar       string
+	Allow        []string
+	HeaderFields []string
 }
 
-// secretScope distinguishes the three scopes a secret name can carry.
-type secretScope int
+// Scope distinguishes the three scopes a secret name can carry.
+type Scope int
 
 const (
-	scopeGlobal secretScope = iota
-	scopeProfile
-	scopeProject
+	ScopeGlobal Scope = iota
+	ScopeProfile
+	ScopeProject
 )
 
-// secretName is a validated secret name plus its resolved scope parts.
-type secretName struct {
-	full    string
-	scope   secretScope
-	profile string
-	hash    string
-	leaf    string
+// Name is a validated secret name plus its resolved scope parts.
+type Name struct {
+	Full    string
+	Scope   Scope
+	Profile string
+	Hash    string
+	Leaf    string
 }
 
 // secretLeafPattern matches the leaf (env var) segment of a secret name.
 var secretLeafPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// parseSecretName validates a path-like secret name and resolves its scope.
+// ParseName validates a path-like secret name and resolves its scope.
 // A single segment is a global secret; two segments are profile-scoped when
 // the first is a built-in profile name and project-scoped when it is a
 // project hash.
-func parseSecretName(name string) (secretName, error) {
+func ParseName(name string) (Name, error) {
 	if name == "" {
-		return secretName{}, fmt.Errorf("empty secret name")
+		return Name{}, fmt.Errorf("empty secret name")
 	}
 	parts := strings.Split(name, "/")
-	n := secretName{full: name}
+	n := Name{Full: name}
 	switch len(parts) {
 	case 1:
-		n.scope = scopeGlobal
+		n.Scope = ScopeGlobal
 	case 2:
 		switch {
-		case slices.Contains(availableProfiles(), parts[0]):
-			n.scope, n.profile = scopeProfile, parts[0]
-		case projectHashPattern.MatchString(parts[0]):
-			n.scope, n.hash = scopeProject, parts[0]
+		case slices.Contains(profile.Available(), parts[0]):
+			n.Scope, n.Profile = ScopeProfile, parts[0]
+		case config.ProjectHashPattern.MatchString(parts[0]):
+			n.Scope, n.Hash = ScopeProject, parts[0]
 		default:
-			return secretName{}, fmt.Errorf(
+			return Name{}, fmt.Errorf(
 				"invalid secret name %q: %q is not a built-in profile (available: %s) nor a 12-hex project hash",
-				name, parts[0], strings.Join(availableProfiles(), ", "),
+				name, parts[0], strings.Join(profile.Available(), ", "),
 			)
 		}
 	default:
-		return secretName{}, fmt.Errorf("invalid secret name %q: at most two segments", name)
+		return Name{}, fmt.Errorf("invalid secret name %q: at most two segments", name)
 	}
-	n.leaf = parts[len(parts)-1]
-	if !secretLeafPattern.MatchString(n.leaf) {
-		return secretName{}, fmt.Errorf(
+	n.Leaf = parts[len(parts)-1]
+	if !secretLeafPattern.MatchString(n.Leaf) {
+		return Name{}, fmt.Errorf(
 			"invalid secret name %q: the last segment must be a valid env var name", name)
 	}
 	return n, nil
 }
 
-// secretScopeKey identifies a scope: the file its settings live in and the
-// prefix its secret names carry.
-type secretScopeKey struct {
-	scope   secretScope
-	profile string
-	hash    string
+// ScopeKey identifies a scope: the file its settings live in and the prefix
+// its secret names carry.
+type ScopeKey struct {
+	Scope   Scope
+	Profile string
+	Hash    string
 }
 
-// scopeKeyOf returns the scope key a secret name belongs to.
-func scopeKeyOf(n secretName) secretScopeKey {
-	switch n.scope {
-	case scopeProfile:
-		return secretScopeKey{scope: scopeProfile, profile: n.profile}
-	case scopeProject:
-		return secretScopeKey{scope: scopeProject, hash: n.hash}
+// ScopeKeyOf returns the scope key a secret name belongs to.
+func ScopeKeyOf(n Name) ScopeKey {
+	switch n.Scope {
+	case ScopeProfile:
+		return ScopeKey{Scope: ScopeProfile, Profile: n.Profile}
+	case ScopeProject:
+		return ScopeKey{Scope: ScopeProject, Hash: n.Hash}
 	default:
-		return secretScopeKey{scope: scopeGlobal}
+		return ScopeKey{Scope: ScopeGlobal}
 	}
 }
 
-// scopeKeyFromArg maps a resolved configure argument to its scope key.
-func scopeKeyFromArg(arg scopeArg) secretScopeKey {
+// ScopeKeyFromArg maps a resolved configure argument to its scope key.
+func ScopeKeyFromArg(arg config.ScopeArg) ScopeKey {
 	switch {
-	case arg.profile != "":
-		return secretScopeKey{scope: scopeProfile, profile: arg.profile}
-	case arg.hash != "":
-		return secretScopeKey{scope: scopeProject, hash: arg.hash}
+	case arg.Profile != "":
+		return ScopeKey{Scope: ScopeProfile, Profile: arg.Profile}
+	case arg.Hash != "":
+		return ScopeKey{Scope: ScopeProject, Hash: arg.Hash}
 	default:
-		return secretScopeKey{scope: scopeGlobal}
+		return ScopeKey{Scope: ScopeGlobal}
 	}
 }
 
 // prefix returns the scope prefix of a secret name.
-func (k secretScopeKey) prefix() string {
-	switch k.scope {
-	case scopeProfile:
-		return k.profile
-	case scopeProject:
-		return k.hash
+func (k ScopeKey) prefix() string {
+	switch k.Scope {
+	case ScopeProfile:
+		return k.Profile
+	case ScopeProject:
+		return k.Hash
 	default:
 		return ""
 	}
 }
 
 // name returns the full name of a secret in the scope.
-func (k secretScopeKey) name(envVar string) string {
+func (k ScopeKey) name(envVar string) string {
 	if prefix := k.prefix(); prefix != "" {
 		return prefix + "/" + envVar
 	}
 	return envVar
 }
 
-// configureArg renders the scope as a `motte secrets configure` argument.
-func (k secretScopeKey) configureArg() string {
-	switch k.scope {
-	case scopeProfile:
-		return k.profile
-	case scopeProject:
-		if hash, err := dirHash(); err == nil && hash == k.hash {
+// ConfigureArg renders the scope as a `motte secrets configure` argument.
+func (k ScopeKey) ConfigureArg() string {
+	switch k.Scope {
+	case ScopeProfile:
+		return k.Profile
+	case ScopeProject:
+		if hash, err := config.DirHash(); err == nil && hash == k.Hash {
 			return "project"
 		}
-		return k.hash
+		return k.Hash
 	default:
 		return "global"
 	}
 }
 
-// path returns the file the scope's settings live in.
-func (k secretScopeKey) path() (string, error) {
-	root, err := secretsDir()
+// Path returns the file the scope's settings live in.
+func (k ScopeKey) Path() (string, error) {
+	root, err := config.SecretsDir()
 	if err != nil {
 		return "", err
 	}
 	name := "global.yaml"
-	switch k.scope {
-	case scopeProfile:
-		name = k.profile + ".yaml"
-	case scopeProject:
-		name = k.hash + ".yaml"
+	switch k.Scope {
+	case ScopeProfile:
+		name = k.Profile + ".yaml"
+	case ScopeProject:
+		name = k.Hash + ".yaml"
 	}
 	return filepath.Join(root, name), nil
 }
 
-// secretHostEnvVar returns the host env var a resolved secret value travels in.
-func secretHostEnvVar(envVar string) string {
+// HostEnvVar returns the host env var a resolved secret value travels in.
+func HostEnvVar(envVar string) string {
 	return secretHostVarPrefix + envVar
 }
 
-// secretStore is the keychain boundary; tests swap in an in-memory fake.
-type secretStore interface {
-	get(account string) (string, error)
-	set(account, value string) error
-	delete(account string) error
+// Store is the keychain boundary; tests swap in an in-memory fake.
+type Store interface {
+	Get(account string) (string, error)
+	Set(account, value string) error
+	Delete(account string) error
 }
 
 // keyringStore is the real store backed by the OS keyring.
 type keyringStore struct{}
 
-func (keyringStore) get(account string) (string, error) {
+func (keyringStore) Get(account string) (string, error) {
 	value, err := kr.Get(keyringService, account)
 	if errors.Is(err, kr.ErrNotFound) {
-		return "", fmt.Errorf("secret %s: %w", account, errSecretNotFound)
+		return "", fmt.Errorf("secret %s: %w", account, ErrNotFound)
 	}
 	if err != nil {
 		return "", fmt.Errorf("reading %s from the keyring: %w", account, err)
@@ -223,30 +225,30 @@ func (keyringStore) get(account string) (string, error) {
 	return value, nil
 }
 
-func (keyringStore) set(account, value string) error {
+func (keyringStore) Set(account, value string) error {
 	if err := kr.Set(keyringService, account, value); err != nil {
 		return fmt.Errorf("storing %s in the keyring: %w", account, err)
 	}
 	return nil
 }
 
-func (keyringStore) delete(account string) error {
+func (keyringStore) Delete(account string) error {
 	if err := kr.Delete(keyringService, account); err != nil && !errors.Is(err, kr.ErrNotFound) {
 		return fmt.Errorf("deleting %s from the keyring: %w", account, err)
 	}
 	return nil
 }
 
-// defaultSecretStore is the process-wide keychain; tests override it.
-var defaultSecretStore secretStore = keyringStore{}
+// DefaultStore is the process-wide keychain; tests override it.
+var DefaultStore Store = keyringStore{}
 
-// probeKeychain reports whether an account carries a secret: "yes", "no", or
+// ProbeKeychain reports whether an account carries a secret: "yes", "no", or
 // "?" when the keychain itself could not be serviced.
-func probeKeychain(account string) string {
-	switch _, err := defaultSecretStore.get(account); {
+func ProbeKeychain(account string) string {
+	switch _, err := DefaultStore.Get(account); {
 	case err == nil:
 		return "yes"
-	case errors.Is(err, errSecretNotFound):
+	case errors.Is(err, ErrNotFound):
 		return "no"
 	default:
 		return "?"
@@ -264,10 +266,10 @@ type secretEntryDoc struct {
 	HeaderFields []string `yaml:"header_fields"`
 }
 
-// readSecretScope strictly decodes one scope file and returns the secrets it
+// ReadScope strictly decodes one scope file and returns the secrets it
 // holds, keyed by env var name. A missing file holds no secrets.
-func readSecretScope(key secretScopeKey) (map[string]secretSpec, error) {
-	path, err := key.path()
+func ReadScope(key ScopeKey) (map[string]Spec, error) {
+	path, err := key.Path()
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +292,7 @@ func readSecretScope(key secretScopeKey) (map[string]secretSpec, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("invalid secret config %s: multiple YAML documents", path)
 	}
-	secrets := make(map[string]secretSpec, len(doc.Secrets))
+	secrets := make(map[string]Spec, len(doc.Secrets))
 	for envVar, entry := range doc.Secrets {
 		if len(entry.Allow) == 0 {
 			return nil, fmt.Errorf(
@@ -298,7 +300,7 @@ func readSecretScope(key secretScopeKey) (map[string]secretSpec, error) {
 				path, envVar)
 		}
 		for _, host := range entry.Allow {
-			if err := validateSecretAllowEntry(host); err != nil {
+			if err := ValidateAllowEntry(host); err != nil {
 				return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
 			}
 		}
@@ -309,13 +311,13 @@ func readSecretScope(key secretScopeKey) (map[string]secretSpec, error) {
 		}
 		headerFields := entry.HeaderFields
 		if headerFields == nil {
-			headerFields = defaultSecretHeaderFields
+			headerFields = DefaultHeaderFields
 		}
-		secrets[envVar] = secretSpec{
-			name:         key.name(envVar),
-			envVar:       envVar,
-			allow:        entry.Allow,
-			headerFields: headerFields,
+		secrets[envVar] = Spec{
+			Name:         key.name(envVar),
+			EnvVar:       envVar,
+			Allow:        entry.Allow,
+			HeaderFields: headerFields,
 		}
 	}
 	return secrets, nil
@@ -386,14 +388,14 @@ func secretsMapping(doc *yaml.Node) (*yaml.Node, error) {
 }
 
 // setSecretEntry adds or replaces one secret in a scope mapping.
-func setSecretEntry(mapping *yaml.Node, envVar string, spec secretSpec) {
+func setSecretEntry(mapping *yaml.Node, envVar string, spec Spec) {
 	value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	allow := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, host := range spec.allow {
+	for _, host := range spec.Allow {
 		allow.Content = append(allow.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: host})
 	}
 	headers := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, field := range spec.headerFields {
+	for _, field := range spec.HeaderFields {
 		headers.Content = append(headers.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: field})
 	}
 	value.Content = append(value.Content,
@@ -446,13 +448,13 @@ func writeSecretScope(path string, doc *yaml.Node) error {
 	return nil
 }
 
-// secretsTemplate returns the commented skeleton of a new secrets scope file.
-// The project scope of the current directory names the directory it belongs
-// to, so the file identifies its location.
-func secretsTemplate(key secretScopeKey) (string, error) {
-	header := fmt.Sprintf("# motte secrets — %s\n#\n", labelScope(key.profile, key.hash, false))
-	if hash, err := dirHash(); err == nil && key.scope == scopeProject && hash == key.hash {
-		path, err := projectPath()
+// Template returns the commented skeleton of a new secrets scope file. The
+// project scope of the current directory names the directory it belongs to,
+// so the file identifies its location.
+func Template(key ScopeKey) (string, error) {
+	header := fmt.Sprintf("# motte secrets — %s\n#\n", config.LabelScope(key.Profile, key.Hash, false))
+	if hash, err := config.DirHash(); err == nil && key.Scope == ScopeProject && hash == key.Hash {
+		path, err := config.ProjectPath()
 		if err != nil {
 			return "", err
 		}
@@ -468,11 +470,11 @@ func secretsTemplate(key secretScopeKey) (string, error) {
 		"  #     - \"*.opencode.ai\"\n", nil
 }
 
-// writeSecretMeta adds or replaces one secret in its scope file. The file
-// keeps the comments and the other secrets it holds.
-func writeSecretMeta(n secretName, spec secretSpec) error {
-	key := scopeKeyOf(n)
-	path, err := key.path()
+// WriteMeta adds or replaces one secret in its scope file. The file keeps
+// the comments and the other secrets it holds.
+func WriteMeta(n Name, spec Spec) error {
+	key := ScopeKeyOf(n)
+	path, err := key.Path()
 	if err != nil {
 		return err
 	}
@@ -484,15 +486,15 @@ func writeSecretMeta(n secretName, spec secretSpec) error {
 	if err != nil {
 		return fmt.Errorf("invalid secret config %s: %w", path, err)
 	}
-	setSecretEntry(mapping, n.leaf, spec)
+	setSecretEntry(mapping, n.Leaf, spec)
 	return writeSecretScope(path, doc)
 }
 
-// removeSecretMeta deletes one secret from its scope file and removes the
-// file when it holds no secret anymore.
-func removeSecretMeta(n secretName) error {
-	key := scopeKeyOf(n)
-	path, err := key.path()
+// RemoveMeta deletes one secret from its scope file and removes the file
+// when it holds no secret anymore.
+func RemoveMeta(n Name) error {
+	key := ScopeKeyOf(n)
+	path, err := key.Path()
 	if err != nil {
 		return err
 	}
@@ -504,7 +506,7 @@ func removeSecretMeta(n secretName) error {
 	if err != nil {
 		return fmt.Errorf("invalid secret config %s: %w", path, err)
 	}
-	if !removeSecretEntry(mapping, n.leaf) {
+	if !removeSecretEntry(mapping, n.Leaf) {
 		return nil
 	}
 	if len(mapping.Content) == 0 {
@@ -516,9 +518,9 @@ func removeSecretMeta(n secretName) error {
 	return writeSecretScope(path, doc)
 }
 
-// validateSecretAllowEntry checks one secret allow host: an exact host, a
+// ValidateAllowEntry checks one secret allow host: an exact host, a
 // `*.suffix` wildcard, or `*` for any host — the SDK SecretEntry grammar.
-func validateSecretAllowEntry(entry string) error {
+func ValidateAllowEntry(entry string) error {
 	entry = strings.TrimSpace(entry)
 	if entry == "*" {
 		return nil
@@ -535,43 +537,43 @@ func validateSecretAllowEntry(entry string) error {
 	return nil
 }
 
-// scanEffectiveSecrets returns the effective secret set for a profile launch:
+// ScanEffective returns the effective secret set for a profile launch:
 // global secrets plus the profile's own and this directory's project secrets,
 // with project > profile > global precedence, deduplicated by env var name.
-func scanEffectiveSecrets(profileName string) ([]secretSpec, error) {
-	hash, err := dirHash()
+func ScanEffective(profileName string) ([]Spec, error) {
+	hash, err := config.DirHash()
 	if err != nil {
 		return nil, err
 	}
-	keys := []secretScopeKey{
-		{scope: scopeGlobal},
-		{scope: scopeProfile, profile: profileName},
-		{scope: scopeProject, hash: hash},
+	keys := []ScopeKey{
+		{Scope: ScopeGlobal},
+		{Scope: ScopeProfile, Profile: profileName},
+		{Scope: ScopeProject, Hash: hash},
 	}
-	var effective []secretSpec
+	var effective []Spec
 	winner := map[string]int{} // env var -> index of the winning secret so far
 	for _, key := range keys {
-		secrets, err := readSecretScope(key)
+		secrets, err := ReadScope(key)
 		if err != nil {
 			return nil, err
 		}
-		for _, envVar := range sortedSecretNames(secrets) {
+		for _, envVar := range SortedNames(secrets) {
 			spec := secrets[envVar]
-			if idx, ok := winner[spec.envVar]; ok {
+			if idx, ok := winner[spec.EnvVar]; ok {
 				fmt.Fprintf(os.Stderr, "motte: secret %s is shadowed by the more specific %s\n",
-					effective[idx].name, spec.name)
+					effective[idx].Name, spec.Name)
 				effective[idx] = spec
 				continue
 			}
-			winner[spec.envVar] = len(effective)
+			winner[spec.EnvVar] = len(effective)
 			effective = append(effective, spec)
 		}
 	}
 	return effective, nil
 }
 
-// sortedSecretNames returns the env var names of a scope in a stable order.
-func sortedSecretNames(secrets map[string]secretSpec) []string {
+// SortedNames returns the env var names of a scope in a stable order.
+func SortedNames(secrets map[string]Spec) []string {
 	names := make([]string, 0, len(secrets))
 	for name := range secrets {
 		names = append(names, name)
@@ -580,20 +582,20 @@ func sortedSecretNames(secrets map[string]secretSpec) []string {
 	return names
 }
 
-// secretCountAll returns how many secrets are configured under any scope;
-// used for the first-run hint.
-func secretCountAll() (int, error) {
-	root, err := secretsDir()
+// CountAll returns how many secrets are configured under any scope; used
+// for the first-run hint.
+func CountAll() (int, error) {
+	root, err := config.SecretsDir()
 	if err != nil {
 		return 0, err
 	}
-	scopes, err := lsScopes(root)
+	scopes, err := config.LsScopes(root)
 	if err != nil {
 		return 0, err
 	}
 	count := 0
 	for _, scope := range scopes {
-		secrets, err := readSecretScope(scopeKeyFromArg(scope))
+		secrets, err := ReadScope(ScopeKeyFromArg(scope))
 		if err != nil {
 			return 0, err
 		}
@@ -602,19 +604,19 @@ func secretCountAll() (int, error) {
 	return count, nil
 }
 
-// storedSecret is one secret as recorded in a durable sandbox config.
-type storedSecret struct {
-	envVar       string
-	value        string
-	allow        []string
-	headerFields []string
+// Stored is one secret as recorded in a durable sandbox config.
+type Stored struct {
+	EnvVar       string
+	Value        string
+	Allow        []string
+	HeaderFields []string
 }
 
-// parseStoredSecrets extracts the secrets of a stored sandbox config JSON,
+// ParseStored extracts the secrets of a stored sandbox config JSON,
 // tolerating the durable shapes runtimes have written: secrets as an array or
 // a map, hosts as HostPattern objects or strings, and `injection` as the
 // older spelling of `substitution`.
-func parseStoredSecrets(configJSON string) ([]storedSecret, error) {
+func ParseStored(configJSON string) ([]Stored, error) {
 	if configJSON == "" {
 		return nil, nil
 	}
@@ -643,7 +645,7 @@ func parseStoredSecrets(configJSON string) ([]storedSecret, error) {
 			docs = append(docs, doc)
 		}
 	}
-	var entries []storedSecret
+	var entries []Stored
 	for _, doc := range docs {
 		entries = append(entries, doc.storedSecret())
 	}
@@ -673,7 +675,7 @@ type storedSecretJSON struct {
 
 // storedSecret converts to the compact runtime form, preferring the kebab-case
 // field and the alias.
-func (s storedSecretJSON) storedSecret() storedSecret {
+func (s storedSecretJSON) storedSecret() Stored {
 	sub := s.Sub
 	if sub == nil {
 		sub = s.Inject
@@ -682,11 +684,11 @@ func (s storedSecretJSON) storedSecret() storedSecret {
 	if sub != nil {
 		headers = sub.HeaderFields
 	}
-	return storedSecret{
-		envVar:       firstNonEmpty(s.EnvVar, s.Name),
-		value:        s.Value,
-		allow:        hostPatternStrings(s.Allowed, s.Allow),
-		headerFields: headers,
+	return Stored{
+		EnvVar:       firstNonEmpty(s.EnvVar, s.Name),
+		Value:        s.Value,
+		Allow:        hostPatternStrings(s.Allowed, s.Allow),
+		HeaderFields: headers,
 	}
 }
 
@@ -746,39 +748,39 @@ func (h *hostPatternValue) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("host pattern: unknown shape %s", string(data))
 }
 
-// secretDrift compares the secrets stored in a sandbox config against the
-// desired set (both keyed by env var name). It returns the desired secrets to
+// Drift compares the secrets stored in a sandbox config against the desired
+// set (both keyed by env var name). It returns the desired secrets to
 // upsert, stored secrets to remove, and the upserts that replace a stored raw
 // (plaintext) value with a keychain-backed env reference.
-func secretDrift(stored []storedSecret, desired []secretSpec) (upsert []secretSpec, remove, migrated []string) {
-	want := make(map[string]secretSpec, len(desired))
+func Drift(stored []Stored, desired []Spec) (upsert []Spec, remove, migrated []string) {
+	want := make(map[string]Spec, len(desired))
 	for _, spec := range desired {
-		want[spec.envVar] = spec
+		want[spec.EnvVar] = spec
 	}
 	have := make(map[string]bool, len(stored))
 	for _, s := range stored {
-		if s.envVar == "" {
+		if s.EnvVar == "" {
 			continue
 		}
-		have[s.envVar] = true
-		desired, ok := want[s.envVar]
+		have[s.EnvVar] = true
+		desired, ok := want[s.EnvVar]
 		if !ok {
-			remove = append(remove, s.envVar)
+			remove = append(remove, s.EnvVar)
 			continue
 		}
-		if s.value != "" {
+		if s.Value != "" {
 			// A plaintext value from an older motte build: replace it with
 			// the keychain-backed env reference.
 			upsert = append(upsert, desired)
-			migrated = append(migrated, s.envVar)
+			migrated = append(migrated, s.EnvVar)
 			continue
 		}
-		if !slices.Equal(s.allow, desired.allow) || !slices.Equal(s.headerFields, desired.headerFields) {
+		if !slices.Equal(s.Allow, desired.Allow) || !slices.Equal(s.HeaderFields, desired.HeaderFields) {
 			upsert = append(upsert, desired)
 		}
 	}
 	for _, spec := range desired {
-		if !have[spec.envVar] {
+		if !have[spec.EnvVar] {
 			upsert = append(upsert, spec)
 		}
 	}

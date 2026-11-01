@@ -16,9 +16,13 @@ Motte provides profiles for isolated development environments for agentic develo
   - `motte opencode|oc <profile> [--no-pull] [--replace]` starts a profile in an isolated microsandbox VM via the Go SDK
   - `motte policies <ls|configure>` manages the user network policies
   - `motte secrets <add|set|configure|rm|ls>` manages keychain-backed secrets
-- built-in profiles are defined as Go structs in `profile.go` (compiled into the binary)
-- `scope.go` resolves the config scopes: global, one per built-in profile, and one per project directory (hashed from its path)
-- `config.go` owns motte's config tree: the per-scope file paths, writing file skeletons, and the shared editor configure flow
+- `cmd/motte` is the thin binary entrypoint; all Go code lives under `internal/`
+- `internal/cli` builds the cobra command tree and carries the command implementations (prompts, ls formatting, exit semantics)
+- `internal/launcher` is the boot flow: it merges the user policies into a profile, resolves the keychain secrets, and drives the microsandbox Go SDK
+- `internal/profile` defines the built-in profiles as Go structs (compiled into the binary)
+- `internal/policies` owns the network policy files and the network rule grammar
+- `internal/secrets` owns the keychain-backed secrets and their scope files
+- `internal/config` owns the config tree: the per-scope file paths, the config scopes (global, one per built-in profile, one per project directory hashed from its path), and the shared editor configure flow
 - user policies and secrets live in scope files under `$XDG_CONFIG_HOME/motte/{policies,secrets}`
 
 ## Project constraints
