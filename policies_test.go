@@ -12,16 +12,26 @@ import (
 	m "github.com/superradcompany/microsandbox/sdk/go"
 )
 
-// writePolicyFile writes a file into $XDG_CONFIG_HOME/motte/policies, the
-// directory the launcher reads policies from.
-func writePolicyFile(t *testing.T, name, content string) {
+// assertAllowListed fails unless each target appears in the allow list.
+func assertAllowListed(t *testing.T, allow []string, targets ...string) {
 	t.Helper()
-	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies", name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
+	for _, target := range targets {
+		if slices.Contains(allow, target) {
+			continue
+		}
+		t.Errorf("allow list misses %q; got %v", target, allow)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+}
+
+// assertAllowUnique fails when the allow list repeats an entry.
+func assertAllowUnique(t *testing.T, allow []string) {
+	t.Helper()
+	seen := make(map[string]bool, len(allow))
+	for _, entry := range allow {
+		if seen[entry] {
+			t.Errorf("allow has duplicate %q", entry)
+		}
+		seen[entry] = true
 	}
 }
 
@@ -80,20 +90,9 @@ func TestPolicyAllowExtendsAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writePolicyFile(t, "global.yaml", `network:
-  allow:
-    - "extra.example.com"
-    - "*.github.com"
-`)
-	writePolicyFile(t, "golang.yaml", `network:
-  allow:
-    - "*.github.com"
-    - "one.more.example.com"
-`)
-	writePolicyFile(t, hash+".yaml", `network:
-  allow:
-    - "project.example.com"
-`)
+	writeConfigFile(t, "policies/global.yaml", fixture(t, "policies/extends/global.yaml"))
+	writeConfigFile(t, "policies/golang.yaml", fixture(t, "policies/extends/golang.yaml"))
+	writeConfigFile(t, "policies/"+hash+".yaml", fixture(t, "policies/extends/project.yaml"))
 	profile, err := loadProfile("golang")
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
@@ -118,7 +117,7 @@ func TestPolicyAllowExtendsAndDedups(t *testing.T) {
 // particular an empty list must not resolve to the public profile.
 func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 	isolatedConfigDir(t)
-	writePolicyFile(t, "web.yaml", "")
+	writeConfigFile(t, "policies/web.yaml", "")
 	profile, err := loadProfile("web")
 	if err != nil {
 		t.Fatalf("loadProfile with an empty file: %v", err)
@@ -127,7 +126,7 @@ func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 		t.Errorf("allow len = %d, want the unchanged 17", len(*profile.network.Allow))
 	}
 
-	writePolicyFile(t, "web.yaml", `network:
+	writeConfigFile(t, "policies/web.yaml", `network:
   allow: []
 `)
 	profile, err = loadProfile("web")
@@ -150,7 +149,7 @@ func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 // TestPolicyRejectsUnknownFields fails the launch on a schema typo.
 func TestPolicyRejectsUnknownFields(t *testing.T) {
 	isolatedConfigDir(t)
-	writePolicyFile(t, "web.yaml", `network:
+	writeConfigFile(t, "policies/web.yaml", `network:
   alow:
     - "extra.example.com"
 `)
@@ -161,7 +160,7 @@ func TestPolicyRejectsUnknownFields(t *testing.T) {
 
 	// The TLS toggle is not part of the policy schema either.
 	isolatedConfigDir(t)
-	writePolicyFile(t, "global.yaml", `network:
+	writeConfigFile(t, "policies/global.yaml", `network:
   tls:
     enabled: false
 `)
@@ -175,7 +174,7 @@ func TestPolicyRejectsUnknownFields(t *testing.T) {
 // grammar at load time, with the file named in the error.
 func TestPolicyRejectsBadRuleEntries(t *testing.T) {
 	isolatedConfigDir(t)
-	writePolicyFile(t, "golang.yaml", `network:
+	writeConfigFile(t, "policies/golang.yaml", `network:
   allow:
     - "*.github.com"
     - "webserver"
@@ -202,7 +201,7 @@ func TestPolicyFingerprintChangesWithThePolicy(t *testing.T) {
 	if again := policyFingerprint(profile); again != before {
 		t.Errorf("fingerprint = %q, want the stable %q", again, before)
 	}
-	writePolicyFile(t, "golang.yaml", `network:
+	writeConfigFile(t, "policies/golang.yaml", `network:
   allow:
     - "extra.example.com"
 `)
@@ -278,23 +277,13 @@ func TestPoliciesConfigureCreatesTheTemplate(t *testing.T) {
 	}
 }
 
-// mustDirHash returns the hash of the current directory.
-func mustDirHash(t *testing.T) string {
-	t.Helper()
-	hash, err := dirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return hash
-}
-
 // TestPoliciesConfigureRejectsAnInvalidFile covers the validation after the
 // editor exits.
 func TestPoliciesConfigureRejectsAnInvalidFile(t *testing.T) {
 	isolatedConfigDir(t)
 	t.Setenv("VISUAL", "true")
 	t.Setenv("EDITOR", "true")
-	writePolicyFile(t, "global.yaml", "network:\n  alow:\n    - \"extra.example.com\"\n")
+	writeConfigFile(t, "policies/global.yaml", "network:\n  alow:\n    - \"extra.example.com\"\n")
 	err := runPoliciesConfigure("global")
 	if err == nil {
 		t.Fatal("error = nil, want an invalid-file failure")
@@ -313,7 +302,7 @@ func TestLsScopesSkipsNonScopeFiles(t *testing.T) {
 	isolatedConfigDir(t)
 	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "policies")
 	for _, name := range []string{"global.yaml", "golang.yaml", "1234567890ab.yaml", "bogus.yaml", "global.yml"} {
-		writePolicyFile(t, name, "")
+		writeConfigFile(t, "policies/"+name, "")
 	}
 	if err := os.Mkdir(filepath.Join(root, "archive.yaml"), 0o755); err != nil {
 		t.Fatal(err)
@@ -340,10 +329,10 @@ func TestPoliciesLsListsGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writePolicyFile(t, "global.yaml", "network:\n  allow:\n    - \"global.example.com\"\n    - \"*.opencode.ai\"\n")
-	writePolicyFile(t, "golang.yaml", "network:\n  allow: []\n")
-	writePolicyFile(t, hash+".yaml", "network:\n  allow:\n    - \"project.example.com\"\n")
-	writePolicyFile(t, "ffffffffffff.yaml", "network:\n  allow:\n    - \"other.example.com\"\n")
+	writeConfigFile(t, "policies/global.yaml", fixture(t, "policies/ls/global.yaml"))
+	writeConfigFile(t, "policies/golang.yaml", "network:\n  allow: []\n")
+	writeConfigFile(t, "policies/"+hash+".yaml", fixture(t, "policies/ls/project.yaml"))
+	writeConfigFile(t, "policies/ffffffffffff.yaml", fixture(t, "policies/ls/foreign.yaml"))
 	stdout, stderr := captureOutput(t, func() {
 		if err := runPoliciesLs(); err != nil {
 			t.Errorf("runPoliciesLs: %v", err)
@@ -390,7 +379,7 @@ func TestPoliciesLsEmpty(t *testing.T) {
 // group header.
 func TestPoliciesLsReportsUnreadableScopes(t *testing.T) {
 	isolatedConfigDir(t)
-	writePolicyFile(t, "global.yaml", "network: [oops\n")
+	writeConfigFile(t, "policies/global.yaml", "network: [oops\n")
 	stdout, _ := captureOutput(t, func() {
 		if err := runPoliciesLs(); err != nil {
 			t.Errorf("runPoliciesLs: %v", err)

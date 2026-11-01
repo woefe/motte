@@ -45,18 +45,6 @@ func swapStore(t *testing.T, store secretStore) {
 	t.Cleanup(func() { defaultSecretStore = original })
 }
 
-// writeSecretFS writes a file under $XDG_CONFIG_HOME/motte (relpath uses /).
-func writeSecretFS(t *testing.T, relpath, content string) {
-	t.Helper()
-	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", relpath)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestParseSecretName covers the path-like name grammar per scope.
 func TestParseSecretName(t *testing.T) {
 	tests := []struct {
@@ -186,7 +174,7 @@ func TestReadWriteSecretMeta(t *testing.T) {
 	}
 
 	// Unknown fields fail lint-style, with the path in the error.
-	writeSecretFS(t, "secrets/golang.yaml",
+	writeConfigFile(t, "secrets/golang.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
 	_, err = readSecretScope(scopeKeyOf(name))
 	if err == nil || !strings.Contains(err.Error(), "invalid secret config") || !strings.Contains(err.Error(), "alow") {
@@ -194,14 +182,14 @@ func TestReadWriteSecretMeta(t *testing.T) {
 	}
 
 	// A missing allow list is invalid.
-	writeSecretFS(t, "secrets/golang.yaml",
+	writeConfigFile(t, "secrets/golang.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    header_fields: [origin]\n")
 	if _, err := readSecretScope(scopeKeyOf(name)); err == nil || !strings.Contains(err.Error(), "empty allow list") {
 		t.Errorf("error = %v, want an empty-allow error", err)
 	}
 
 	// Allow hosts must be host patterns, not network rule targets.
-	writeSecretFS(t, "secrets/golang.yaml",
+	writeConfigFile(t, "secrets/golang.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"host:tcp:9931\"]\n")
 	if _, err := readSecretScope(
 		scopeKeyOf(name),
@@ -216,13 +204,7 @@ func TestReadWriteSecretMeta(t *testing.T) {
 // add and a remove.
 func TestSecretScopeFileKeepsCommentsAndSiblings(t *testing.T) {
 	isolatedConfigDir(t)
-	writeSecretFS(t, "secrets/golang.yaml", `# the golang scope
-secrets:
-  # the key we use
-  OPENCODE_GO_KEY:
-    allow:
-      - "*.opencode.ai"
-`)
+	writeConfigFile(t, "secrets/golang.yaml", fixture(t, "secrets/comments/golang.yaml"))
 	first, err := parseSecretName("golang/OPENCODE_GO_KEY")
 	if err != nil {
 		t.Fatal(err)
@@ -310,11 +292,9 @@ func TestScanEffectiveSecretsPrecedence(t *testing.T) {
 	scopeDoc := func(allow string) string {
 		return "secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"" + allow + "\"\n"
 	}
-	writeSecretFS(t, "secrets/global.yaml", scopeDoc("global.example.com"))
-	writeSecretFS(t, "secrets/"+hash+".yaml", scopeDoc("project.example.com"))
-	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n"+
-		"  OPENCODE_GO_KEY:\n    allow:\n      - \"profile.example.com\"\n"+
-		"  OTHER_SECRET:\n    allow:\n      - \"other.example.com\"\n")
+	writeConfigFile(t, "secrets/global.yaml", scopeDoc("global.example.com"))
+	writeConfigFile(t, "secrets/"+hash+".yaml", scopeDoc("project.example.com"))
+	writeConfigFile(t, "secrets/golang.yaml", fixture(t, "secrets/precedence/golang.yaml"))
 
 	effective, err := scanEffectiveSecrets("golang")
 	if err != nil {
@@ -350,7 +330,7 @@ func TestScanEffectiveSecretsPrecedence(t *testing.T) {
 func TestResolveSecrets(t *testing.T) {
 	isolatedConfigDir(t)
 	swapStore(t, newFakeStore(map[string]string{"OPENCODE_GO_KEY": "sk_test"}))
-	writeSecretFS(t, "secrets/global.yaml",
+	writeConfigFile(t, "secrets/global.yaml",
 		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n")
 	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_OPENCODE_GO_KEY") })
 
@@ -394,12 +374,9 @@ func TestSecretsLsListsGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeSecretFS(t, "secrets/global.yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n"+
-			"  ANOTHER_KEY:\n    allow:\n      - \"a.example.com\"\n      - \"b.example.com\"\n")
-	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n")
-	writeSecretFS(t, "secrets/"+hash+".yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"project.example.com\"\n")
+	writeConfigFile(t, "secrets/global.yaml", fixture(t, "secrets/ls/global.yaml"))
+	writeConfigFile(t, "secrets/golang.yaml", "secrets:\n")
+	writeConfigFile(t, "secrets/"+hash+".yaml", fixture(t, "secrets/ls/project.yaml"))
 	stdout, stderr := captureOutput(t, func() {
 		if err := runSecretsLs(); err != nil {
 			t.Errorf("runSecretsLs: %v", err)
@@ -447,7 +424,7 @@ func TestSecretsLsEmpty(t *testing.T) {
 func TestSecretsLsReportsUnreadableScopes(t *testing.T) {
 	isolatedConfigDir(t)
 	swapStore(t, newFakeStore(nil))
-	writeSecretFS(t, "secrets/global.yaml", "secrets: [oops\n")
+	writeConfigFile(t, "secrets/global.yaml", "secrets: [oops\n")
 	stdout, _ := captureOutput(t, func() {
 		if err := runSecretsLs(); err != nil {
 			t.Errorf("runSecretsLs: %v", err)
@@ -526,7 +503,7 @@ func TestSecretsConfigureRejectsAnInvalidFile(t *testing.T) {
 	isolatedConfigDir(t)
 	t.Setenv("VISUAL", "true")
 	t.Setenv("EDITOR", "true")
-	writeSecretFS(t, "secrets/global.yaml", "secrets:\n  KEY: [oops\n")
+	writeConfigFile(t, "secrets/global.yaml", "secrets:\n  KEY: [oops\n")
 	err := runSecretsConfigure("global")
 	if err == nil {
 		t.Fatal("error = nil, want an invalid-file failure")
@@ -543,7 +520,7 @@ func TestSecretsConfigureRejectsAnInvalidFile(t *testing.T) {
 func TestSecretsCommandsSurfaceScopeFileErrors(t *testing.T) {
 	isolatedConfigDir(t)
 	swapStore(t, newFakeStore(map[string]string{"golang/API_KEY": "old"}))
-	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n  API_KEY: [oops\n")
+	writeConfigFile(t, "secrets/golang.yaml", "secrets:\n  API_KEY: [oops\n")
 	commands := []struct {
 		name string
 		run  func() error
@@ -565,7 +542,7 @@ func TestSecretsCommandsSurfaceScopeFileErrors(t *testing.T) {
 	}
 
 	// A healthy scope without the secret: set points at add, rm does not.
-	writeSecretFS(t, "secrets/golang.yaml", "secrets:\n  OTHER:\n    allow: [\"*.example.com\"]\n")
+	writeConfigFile(t, "secrets/golang.yaml", "secrets:\n  OTHER:\n    allow: [\"*.example.com\"]\n")
 	if err := runSecretsSet("golang/API_KEY"); err == nil ||
 		!strings.Contains(err.Error(), "motte secrets add") {
 		t.Errorf("set error = %v, want the add hint", err)
@@ -582,7 +559,7 @@ func TestSecretsCommandsSurfaceScopeFileErrors(t *testing.T) {
 // value prompts for it.
 func TestAddSecretUpsert(t *testing.T) {
 	isolatedConfigDir(t)
-	writeSecretFS(t, "secrets/global.yaml",
+	writeConfigFile(t, "secrets/global.yaml",
 		"secrets:\n  FOO:\n    allow:\n      - \"*.foo.example.com\"\n")
 	store := newFakeStore(map[string]string{"FOO": "current"})
 	swapStore(t, store)
