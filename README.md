@@ -16,13 +16,10 @@ Building images locally also needs `podman` and [Task](https://taskfile.dev).
 ## Usage
 
 ```sh
-motte oc base     # base profile
-motte oc golang   # golang profile
-motte oc rails    # rails profile
-motte oc web      # web profile
+motte opencode base # start the base profile
+motte oc golang     # start the golang profile. `oc` is an alias of `opencode`
 ```
 
-`motte opencode <profile>` is the long form of `motte oc <profile>`.
 This pulls the CI-built image, starts a microsandbox microVM, and launches the OpenCode TUI with the directory you launched motte from mounted read-write at `/workspace`.
 Each directory has its own VM, named after a hash of that directory; the launcher prints the name it uses.
 A directory's VM is reused across runs, so sessions and config on its root disk are kept; pass `--replace` to recreate the VM from scratch.
@@ -32,7 +29,10 @@ The profiles are compiled into the binary; a profile image change therefore goes
 Useful one-offs (substitute the VM name the launcher printed):
 
 ```sh
-# Verify the sandbox can reach everything it should (agent + llama /health)
+# List microsandbox VMs
+msb ls
+
+# Verify the agent is installed
 msb exec <vm-name> -- check
 
 # Continue a previous session
@@ -86,46 +86,32 @@ Tags: `ghcr.io/woefe/motte/{base,golang,rails,web}:{latest,YYYY-MM-DD}` — pin 
 Boot the local image with `motte oc <profile> --no-pull --replace`.
 The local image shadows `latest` in the msb cache only until the next plain `motte oc <profile>` re-pulls GHCR, which restores the CI image.
 
-## Default OpenCode inference providers
-The default opencode config sets up a llama.cpp and OpenCode Go inference providers
+## OpenCode config
 
-### Local llama.cpp
+Motte mounts `~/.config/motte/opencode` read-only at `/etc/opencode` in every VM, so its `opencode.json` is the OpenCode config of all your sandboxes.
+On the first launch, motte creates a minimal `opencode.json` there.
+Edits apply the next time OpenCode starts in the VM.
+VMs created before motte mounted this directory need a one-time `--replace`.
 
-A llama.cpp server on the host listening on port **9931
-Make sure it is bound to an interface the sandbox gateway can reach, e.g. `--host 0.0.0.0`:
-
-```sh
-llama-server -m ./model.gguf --host 0.0.0.0 --port 9931
-```
-
-### OpenCode Go
-The API key is injected via a **microsandbox secret** — the key's value never enters the VM, and it is never stored in plain by motte or microsandbox on the host.
-Create the key at https://opencode.ai/console, then store it with:
-
-```sh
-motte secrets add
-```
-
-Enter `OPENCODE_GO_KEY` as the secret name; the prompts then ask for the scope, the allowed hosts, and the value (input hidden).
-Allowed hosts default to `*.opencode.ai` for `OPENCODE_GO_KEY`.
-Finally, launch the sandbox with `motte oc <profile>`.
+Reference API keys in `opencode.json` as `{env:NAME}` and store their values with `motte secrets add` (see [Secrets](#secrets)).
+[docs/PROVIDERS.md](docs/PROVIDERS.md) shows how to connect a providers without placing API keys into the VM.
 
 ## Secrets
 
 Secret values live in the OS keychain, while motte's YAML configs and microsandbox's durable sandbox configs on the host only carry references.
 Secret names are path-like with scopes, and the settings of a scope live in one file under `~/.config/motte/secrets`:
 
-- `OPENCODE_GO_KEY` — global, injected into every profile's VM
-- `golang/OPENCODE_GO_KEY` — profile-scoped, injected only into golang VMs
-- `<dir-hash>/OPENCODE_GO_KEY` — project scope, injected into every profile's VM in this directory
+- `EXAMPLE_API_KEY` — global, injected into every profile's VM
+- `golang/EXAMPLE_API_KEY` — profile-scoped, injected only into golang VMs
+- `<dir-hash>/EXAMPLE_API_KEY` — project scope, injected into every profile's VM in this directory
 
 The scope files are `global.yaml`, `<profile>.yaml`, and `<dir-hash>.yaml`:
 
 ```yaml
 secrets:
-  OPENCODE_GO_KEY:
+  EXAMPLE_API_KEY:
     allow:
-      - "*.opencode.ai"
+      - "api.example.com"
 ```
 
 Both `ls` commands list only the scopes that have a file, and mark the current directory's project scope.

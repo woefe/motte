@@ -30,7 +30,7 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			// Every profile extends the base policy; extras stay in their owning
 			// profiles, and nothing repeats.
 			testutil.AssertAllowListed(t, *profile.Network.Allow,
-				"dns", "*.github.com", "*.opencode.ai", "host:tcp:9931", "pypi.org")
+				"dns", "*.github.com", "*.opencode.ai", "pypi.org")
 			// registry.npmjs.org serves the node toolchain in web and rails.
 			exclusive := map[string][]string{
 				"go.dev":             {"golang"},
@@ -46,7 +46,7 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 					t.Errorf("%s: allow carries %s's extra %q", name, strings.Join(owners, ","), target)
 				}
 			}
-			wantLen := map[string]int{"base": 16, "golang": 21, "rails": 19, "web": 17}[name]
+			wantLen := map[string]int{"base": 15, "golang": 20, "rails": 18, "web": 16}[name]
 			if len(*profile.Network.Allow) != wantLen {
 				t.Errorf("allow len = %d, want %d", len(*profile.Network.Allow), wantLen)
 			}

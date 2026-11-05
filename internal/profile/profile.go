@@ -120,8 +120,6 @@ var baseAllow = []string{
 	// mirrors configured in docker/base/pacman-mirrorlist
 	"fastly.mirror.pkgbuild.com",
 	"geo.mirror.pkgbuild.com",
-	// llama.cpp on the host
-	"host:tcp:9931",
 	// default opencode websearch providers
 	"mcp.exa.ai",
 	"mcp.firecrawl.dev",
@@ -150,8 +148,8 @@ func base() *Profile {
 		Mounts: []MountSpec{{HostPath: "./", GuestPath: "/workspace"}},
 		Cmd:    []string{"opencode"},
 		Scripts: map[string]string{
-			// Connectivity check: opencode version + llama /health.
-			"check": "opencode --version && curl -sf http://host.microsandbox.internal:9931/health && echo 'llama server reachable'",
+			// Connectivity check: the opencode version.
+			"check": "opencode --version",
 		},
 		Network: &NetworkDoc{TLS: &TLSDoc{Enabled: new(true)}},
 	}

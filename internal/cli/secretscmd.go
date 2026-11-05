@@ -129,7 +129,7 @@ func runSecretsAdd() error {
 // valueIn. A configured name keeps its settings as prompt defaults and only
 // replaces the keychain value on request.
 func addSecret(in *bufio.Reader, valueIn io.Reader) error {
-	leaf, err := promptLine(in, "secret env var name (e.g. OPENCODE_GO_KEY): ")
+	leaf, err := promptLine(in, "secret env var name (e.g. EXAMPLE_API_KEY): ")
 	if err != nil {
 		return err
 	}
@@ -154,11 +154,7 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 	if !exists {
 		spec = secrets.Spec{
 			EnvVar:       name.Leaf,
-			Allow:        defaultAllowCatalog(name.Leaf),
-			HeaderFields: defaultHeaderCatalog(name.Leaf),
-		}
-		if spec.HeaderFields == nil {
-			spec.HeaderFields = secrets.DefaultHeaderFields
+			HeaderFields: secrets.DefaultHeaderFields,
 		}
 	}
 	defaults := "none"
@@ -496,23 +492,6 @@ func confirmPrompt(in *bufio.Reader, prompt string, force bool) (bool, error) {
 // isTerminal reports whether f is an interactive terminal.
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
-}
-
-// defaultAllowCatalog returns the egress allow defaults for known secrets.
-func defaultAllowCatalog(leaf string) []string {
-	if leaf == secrets.OpencodeSecretName {
-		return []string{"*.opencode.ai"}
-	}
-	return nil
-}
-
-// defaultHeaderCatalog returns the header substitution defaults for known
-// secrets.
-func defaultHeaderCatalog(leaf string) []string {
-	if leaf == secrets.OpencodeSecretName {
-		return []string{"authorization", "x-api-key"}
-	}
-	return nil
 }
 
 // splitHosts splits a comma-separated host list.

@@ -2,7 +2,7 @@ module github.com/woefe/motte
 
 go 1.26.0
 
-require github.com/superradcompany/microsandbox/sdk/go v0.7.11
+require github.com/superradcompany/microsandbox/sdk/go v0.7.13
 
 require (
 	github.com/spf13/cobra v1.10.2

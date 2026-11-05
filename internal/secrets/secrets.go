@@ -43,10 +43,6 @@ const (
 // DefaultHeaderFields is used when a secret entry omits them.
 var DefaultHeaderFields = []string{"authorization"}
 
-// OpencodeSecretName is the secret motte hints at and migrates from older
-// sandboxes.
-const OpencodeSecretName = "OPENCODE_GO_KEY"
-
 // ErrNotFound reports a missing keychain entry.
 var ErrNotFound = errors.New("secret not found")
 
@@ -466,9 +462,9 @@ func Template(key ScopeKey) (string, error) {
 		"#   allow: the hosts a value may reach (an exact host or a *.wildcard)\n" +
 		"#   header_fields: the headers the value is substituted into\n" +
 		"secrets:\n" +
-		"  # OPENCODE_GO_KEY:\n" +
+		"  # EXAMPLE_API_KEY:\n" +
 		"  #   allow:\n" +
-		"  #     - \"*.opencode.ai\"\n", nil
+		"  #     - \"api.example.com\"\n", nil
 }
 
 // WriteMeta adds or replaces one secret in its scope file. The file keeps
