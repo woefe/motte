@@ -64,11 +64,15 @@ Add the provider to `~/.config/motte/opencode/opencode.json` and reference the k
   "providers": {
     "go": {
       "name": "OpenCode Go",
-      "package": "@opencode/ai/providers/openai-compatible",
+      "package": "aisdk:@ai-sdk/openai-compatible",
       "settings": {
         "baseURL": "https://opencode.ai/zen/go/v1",
         "apiKey": "{env:OPENCODE_GO_KEY}"
       },
+      "models": {
+        "glm-5.3": { "name": "GLM-5.3" },
+        "glm-5.3-flash": { "name": "GLM-5.3 Flash" }
+      }
     }
   }
 }
