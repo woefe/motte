@@ -13,14 +13,6 @@ import (
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// swapStore replaces the default keychain store, restoring it at cleanup.
-func swapStore(t *testing.T, store secrets.Store) {
-	t.Helper()
-	original := secrets.DefaultStore
-	secrets.DefaultStore = store
-	t.Cleanup(func() { secrets.DefaultStore = original })
-}
-
 // TestPolicyAllowExtendsAndDedups appends the user entries after the
 // built-in list, deduplicating across the scopes and with the built-ins.
 func TestPolicyAllowExtendsAndDedups(t *testing.T) {
@@ -158,7 +150,7 @@ func TestPolicyFingerprintChangesWithThePolicy(t *testing.T) {
 // the launch with the set hint.
 func TestResolveSecrets(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "sk_test"}))
+	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "sk_test"})
 	testutil.WriteConfigFile(t, "secrets/global.yaml",
 		"secrets:\n  EXAMPLE_API_KEY:\n    allow:\n      - \"api.example.com\"\n")
 	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_EXAMPLE_API_KEY") })
@@ -167,7 +159,7 @@ func TestResolveSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}
-	resolved, err := resolveSecrets(p)
+	resolved, err := resolveSecrets(p, store)
 	if err != nil {
 		t.Fatalf("resolveSecrets: %v", err)
 	}
@@ -187,8 +179,8 @@ func TestResolveSecrets(t *testing.T) {
 	}
 
 	// Without a keychain value the launch fails with a set hint.
-	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, nil))
-	if _, err := resolveSecrets(p); err == nil ||
+	emptyStore := testutil.NewFakeStore(secrets.ErrNotFound, nil)
+	if _, err := resolveSecrets(p, emptyStore); err == nil ||
 		!strings.Contains(err.Error(), "motte secrets set EXAMPLE_API_KEY") {
 		t.Errorf("error = %v, want the set hint", err)
 	}

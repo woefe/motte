@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,9 +28,9 @@ func mustDirHash(t *testing.T) string {
 // assertConfigureRejects covers the configure flow's re-validation: a scope
 // file that fails to parse after editing exits non-zero without another
 // report, since the configure flow already explained the failure.
-func assertConfigureRejects(t *testing.T, configure func(scope string) error) {
+func assertConfigureRejects(t *testing.T, configure func(errOut io.Writer, scope string) error) {
 	t.Helper()
-	err := configure("global")
+	err := configure(io.Discard, "global")
 	if err == nil || !errors.Is(err, config.ErrInvalidAfterEdit) {
 		t.Errorf("error = %v, want the invalid-after-edit failure", err)
 	}
@@ -41,7 +43,7 @@ func TestPoliciesConfigureCreatesTheTemplate(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	testutil.FakeEditor(t)
 	for _, scope := range []string{"global", "project", "1234567890ab"} {
-		if err := runPoliciesConfigure(scope); err != nil {
+		if err := runPoliciesConfigure(io.Discard, scope); err != nil {
 			t.Fatalf("runPoliciesConfigure(%s): %v", scope, err)
 		}
 	}
@@ -87,11 +89,11 @@ func TestPoliciesLsListsGroups(t *testing.T) {
 	testutil.WriteConfigFile(t, "policies/golang.yaml", "network:\n  allow: []\n")
 	testutil.WriteConfigFile(t, "policies/"+hash+".yaml", testutil.Fixture(t, "policies/ls/project.yaml"))
 	testutil.WriteConfigFile(t, "policies/ffffffffffff.yaml", testutil.Fixture(t, "policies/ls/foreign.yaml"))
-	stdout, stderr := testutil.CaptureOutput(t, func() {
-		if err := runPoliciesLs(); err != nil {
-			t.Errorf("runPoliciesLs: %v", err)
-		}
-	})
+	var outBuf, errBuf bytes.Buffer
+	if err := runPoliciesLs(&outBuf, &errBuf); err != nil {
+		t.Errorf("runPoliciesLs: %v", err)
+	}
+	stdout, stderr := outBuf.String(), errBuf.String()
 	want := fmt.Sprintf(`global:
   global.example.com
   *.opencode.ai
@@ -116,11 +118,11 @@ project ffffffffffff:
 // TestPoliciesLsEmpty prints the create hint when no policy file exists.
 func TestPoliciesLsEmpty(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	stdout, stderr := testutil.CaptureOutput(t, func() {
-		if err := runPoliciesLs(); err != nil {
-			t.Errorf("runPoliciesLs: %v", err)
-		}
-	})
+	var outBuf, errBuf bytes.Buffer
+	if err := runPoliciesLs(&outBuf, &errBuf); err != nil {
+		t.Errorf("runPoliciesLs: %v", err)
+	}
+	stdout, stderr := outBuf.String(), errBuf.String()
 	if stdout != "" {
 		t.Errorf("stdout = %q, want none", stdout)
 	}
@@ -134,11 +136,11 @@ func TestPoliciesLsEmpty(t *testing.T) {
 func TestPoliciesLsReportsUnreadableScopes(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	testutil.WriteConfigFile(t, "policies/global.yaml", "network: [oops\n")
-	stdout, _ := testutil.CaptureOutput(t, func() {
-		if err := runPoliciesLs(); err != nil {
-			t.Errorf("runPoliciesLs: %v", err)
-		}
-	})
+	var outBuf, errBuf bytes.Buffer
+	if err := runPoliciesLs(&outBuf, &errBuf); err != nil {
+		t.Errorf("runPoliciesLs: %v", err)
+	}
+	stdout := outBuf.String()
 	if !strings.HasPrefix(stdout, "global:\n  <unreadable: ") {
 		t.Errorf("stdout = %q, want the unreadable group", stdout)
 	}

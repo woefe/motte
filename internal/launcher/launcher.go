@@ -33,7 +33,7 @@ func Boot(profileName string, noPull, replace bool) (int, error) {
 	// Resolve the effective secrets from the OS keychain and feed them to the
 	// runtime via host env vars; the env vars are only needed until the
 	// sandbox booted.
-	resolved, err := resolveSecrets(p)
+	resolved, err := resolveSecrets(p, secrets.DefaultStore())
 	if err != nil {
 		return 1, err
 	}
@@ -275,7 +275,7 @@ func reportModifications(plan *m.SandboxModificationPlan, name string) {
 // the user's secret configs with precedence applied, validated, egress
 // extended with their allow entries, and values pulled from the keychain into
 // host env vars for the sandbox boot.
-func resolveSecrets(p *profile.Profile) ([]secrets.Spec, error) {
+func resolveSecrets(p *profile.Profile, store secrets.Store) ([]secrets.Spec, error) {
 	configured, err := secrets.ScanEffective(p.Name)
 	if err != nil {
 		return nil, err
@@ -289,7 +289,7 @@ func resolveSecrets(p *profile.Profile) ([]secrets.Spec, error) {
 	}
 	p.ExtendAllow(egress)
 	for _, secret := range configured {
-		value, err := secrets.DefaultStore.Get(secret.Name)
+		value, err := store.Get(secret.Name)
 		if errors.Is(err, secrets.ErrNotFound) {
 			return nil, fmt.Errorf(
 				"secret %s is not in the keychain — set it with: motte secrets set %s",

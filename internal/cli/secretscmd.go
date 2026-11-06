@@ -24,7 +24,7 @@ import (
 )
 
 // secretsCommand builds the `motte secrets` command tree.
-func secretsCommand() *cobra.Command {
+func secretsCommand(store secrets.Store) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "secrets",
 		Short: "manage keychain-backed secrets",
@@ -36,35 +36,35 @@ func secretsCommand() *cobra.Command {
 		},
 	}
 	command.AddCommand(
-		secretsAddCommand(),
-		secretsSetCommand(),
+		secretsAddCommand(store),
+		secretsSetCommand(store),
 		secretsConfigureCommand(),
-		secretsRmCommand(),
-		secretsLsCommand(),
+		secretsRmCommand(store),
+		secretsLsCommand(store),
 	)
 	return command
 }
 
 // secretsAddCommand creates or changes a secret interactively.
-func secretsAddCommand() *cobra.Command {
+func secretsAddCommand(store secrets.Store) *cobra.Command {
 	return &cobra.Command{
 		Use:   "add",
 		Short: "create or change a secret: prompts for name, scope, hosts, and value",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretsAdd()
+			return runSecretsAdd(cmd, store)
 		},
 	}
 }
 
 // secretsSetCommand replaces an existing secret's value.
-func secretsSetCommand() *cobra.Command {
+func secretsSetCommand(store secrets.Store) *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <name>",
 		Short: "(re)set an existing secret's value",
 		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretsSet(args[0])
+			return runSecretsSet(cmd.InOrStdin(), cmd.ErrOrStderr(), store, args[0])
 		},
 	}
 }
@@ -77,20 +77,20 @@ func secretsConfigureCommand() *cobra.Command {
 		Long:  "The scope is global, project, a built-in profile name, or a project hash.",
 		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretsConfigure(args[0])
+			return runSecretsConfigure(cmd.ErrOrStderr(), args[0])
 		},
 	}
 }
 
 // secretsRmCommand deletes a secret's config and keychain value.
-func secretsRmCommand() *cobra.Command {
+func secretsRmCommand(store secrets.Store) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "rm <name>",
 		Short: "delete a secret's config and keychain value",
 		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretsRm(args[0], force)
+			return runSecretsRm(cmd.InOrStdin(), cmd.ErrOrStderr(), store, args[0], force)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "delete without asking")
@@ -98,13 +98,13 @@ func secretsRmCommand() *cobra.Command {
 }
 
 // secretsLsCommand lists the configured secrets.
-func secretsLsCommand() *cobra.Command {
+func secretsLsCommand(store secrets.Store) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
 		Short: "list the configured secrets grouped by scope, with keychain presence",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretsLs()
+			return runSecretsLs(cmd.OutOrStdout(), cmd.ErrOrStderr(), store)
 		},
 	}
 }
@@ -115,25 +115,26 @@ func configureHintErr(scope config.Scope, err error) error {
 }
 
 // runSecretsAdd interactively creates or changes a secret.
-func runSecretsAdd() error {
-	if !isTerminal(os.Stdin) {
+func runSecretsAdd(cmd *cobra.Command, store secrets.Store) error {
+	in := cmd.InOrStdin()
+	if !isTerminalReader(in) {
 		return fmt.Errorf(
 			"motte secrets add is interactive; run it in a terminal, or craft %s/secrets/*.yaml by hand and use `motte secrets set`",
 			config.Hint(),
 		)
 	}
-	return addSecret(bufio.NewReader(os.Stdin), os.Stdin)
+	return addSecret(bufio.NewReader(in), in, cmd.ErrOrStderr(), store)
 }
 
 // addSecret runs the interactive flow: prompts read from in, the value from
-// valueIn. A configured name keeps its settings as prompt defaults and only
-// replaces the keychain value on request.
-func addSecret(in *bufio.Reader, valueIn io.Reader) error {
-	leaf, err := promptLine(in, "secret env var name (e.g. EXAMPLE_API_KEY): ")
+// valueIn, and notices go to errOut. A configured name keeps its settings as
+// prompt defaults and only replaces the keychain value on request.
+func addSecret(in *bufio.Reader, valueIn io.Reader, errOut io.Writer, store secrets.Store) error {
+	leaf, err := promptLine(in, errOut, "secret env var name (e.g. EXAMPLE_API_KEY): ")
 	if err != nil {
 		return err
 	}
-	scope, err := promptSecretScope(in)
+	scope, err := promptSecretScope(in, errOut)
 	if err != nil {
 		return err
 	}
@@ -160,7 +161,7 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 	if len(spec.Allow) > 0 {
 		defaults = strings.Join(spec.Allow, ", ")
 	}
-	entry, err := promptLine(in,
+	entry, err := promptLine(in, errOut,
 		fmt.Sprintf("allowed hosts, comma-separated (exact hosts or *.wildcards) [%s]: ", defaults))
 	if err != nil {
 		return err
@@ -179,23 +180,23 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 
 	replaceValue := true
 	if exists {
-		if _, getErr := secrets.DefaultStore.Get(name.Full); getErr == nil {
-			replaceValue, err = confirmPrompt(in, "replace the keychain value? [y/N]: ", false)
+		if _, getErr := store.Get(name.Full); getErr == nil {
+			replaceValue, err = confirmPrompt(in, errOut, "replace the keychain value? [y/N]: ", false)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	if replaceValue {
-		value, err := readSecretValue("value (input hidden): ", os.Stdout, valueIn)
+		value, err := readSecretValue("value (input hidden): ", errOut, valueIn)
 		if err != nil {
 			return err
 		}
 		if value == "" {
 			return fmt.Errorf("an empty value is not a secret; aborting")
 		}
-		warnLargeValue(value)
-		if err := secrets.DefaultStore.Set(name.Full, value); err != nil {
+		warnLargeValue(errOut, value)
+		if err := store.Set(name.Full, value); err != nil {
 			return err
 		}
 	}
@@ -206,15 +207,15 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 	if replaceValue {
 		verb = "stored"
 	}
-	fmt.Fprintf(os.Stderr, "motte: %s %s (%s); config at %s\n",
+	_, _ = fmt.Fprintf(errOut, "motte: %s %s (%s); config at %s\n",
 		verb, name.Full, name.Scope.Label(false), secretsConfigHint(name))
 	return nil
 }
 
 // promptSecretScope asks for global, profile, or project scope and returns the
 // name prefix: "" for global, a profile name, or the project hash.
-func promptSecretScope(in *bufio.Reader) (string, error) {
-	answer, err := promptLine(in, "scope — [g]lobal, [p]rofile, or [project] for this directory [global]: ")
+func promptSecretScope(in *bufio.Reader, errOut io.Writer) (string, error) {
+	answer, err := promptLine(in, errOut, "scope — [g]lobal, [p]rofile, or [project] for this directory [global]: ")
 	if err != nil {
 		return "", err
 	}
@@ -222,13 +223,13 @@ func promptSecretScope(in *bufio.Reader) (string, error) {
 	case "", "g", "global":
 		return "", nil
 	case "p", "profile":
-		return promptSecretProfile(in)
+		return promptSecretProfile(in, errOut)
 	case "j", "proj", "project":
 		hash, err := config.DirHash()
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(os.Stderr, "project hash for the current directory: %s\n", hash)
+		_, _ = fmt.Fprintf(errOut, "project hash for the current directory: %s\n", hash)
 		return hash, nil
 	default:
 		return "", fmt.Errorf("%q is not a scope; expected global, profile, or project", answer)
@@ -236,9 +237,9 @@ func promptSecretScope(in *bufio.Reader) (string, error) {
 }
 
 // promptSecretProfile prompts for a built-in profile name.
-func promptSecretProfile(in *bufio.Reader) (string, error) {
+func promptSecretProfile(in *bufio.Reader, errOut io.Writer) (string, error) {
 	names := profile.Available()
-	answer, err := promptLine(in, fmt.Sprintf("profile (%s): ", strings.Join(names, ", ")))
+	answer, err := promptLine(in, errOut, fmt.Sprintf("profile (%s): ", strings.Join(names, ", ")))
 	if err != nil {
 		return "", err
 	}
@@ -250,7 +251,7 @@ func promptSecretProfile(in *bufio.Reader) (string, error) {
 }
 
 // runSecretsSet replaces an existing secret's keychain value.
-func runSecretsSet(nameArg string) error {
+func runSecretsSet(in io.Reader, errOut io.Writer, store secrets.Store, nameArg string) error {
 	name, err := secrets.ParseName(nameArg)
 	if err != nil {
 		return err
@@ -262,24 +263,24 @@ func runSecretsSet(nameArg string) error {
 	if _, ok := configured[name.Leaf]; !ok {
 		return fmt.Errorf("secret %s is not configured; create it with `motte secrets add`", name.Full)
 	}
-	value, err := readSecretValue("value (input hidden): ", os.Stdout, os.Stdin)
+	value, err := readSecretValue("value (input hidden): ", errOut, in)
 	if err != nil {
 		return err
 	}
 	if value == "" {
 		return fmt.Errorf("an empty value is not a secret; aborting")
 	}
-	warnLargeValue(value)
-	if err := secrets.DefaultStore.Set(name.Full, value); err != nil {
+	warnLargeValue(errOut, value)
+	if err := store.Set(name.Full, value); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "motte: set the keychain value for %s\n", name.Full)
+	_, _ = fmt.Fprintf(errOut, "motte: set the keychain value for %s\n", name.Full)
 	return nil
 }
 
 // runSecretsConfigure opens a scope's secrets file in the editor, creating it
 // from the template when missing, and re-validates it afterwards.
-func runSecretsConfigure(scopeArg string) error {
+func runSecretsConfigure(errOut io.Writer, scopeArg string) error {
 	scope, err := config.ResolveScope(scopeArg)
 	if err != nil {
 		return err
@@ -291,6 +292,7 @@ func runSecretsConfigure(scopeArg string) error {
 	return config.ConfigureScope(config.ScopeFile{
 		Path:   path,
 		FixCmd: fmt.Sprintf("motte secrets configure %s", scopeArg),
+		ErrOut: errOut,
 		Template: func() (string, error) {
 			return secrets.Template(scope)
 		},
@@ -302,7 +304,7 @@ func runSecretsConfigure(scopeArg string) error {
 }
 
 // runSecretsRm deletes a secret's config and keychain value after asking.
-func runSecretsRm(nameArg string, force bool) error {
+func runSecretsRm(in io.Reader, errOut io.Writer, store secrets.Store, nameArg string, force bool) error {
 	name, err := secrets.ParseName(nameArg)
 	if err != nil {
 		return err
@@ -314,25 +316,25 @@ func runSecretsRm(nameArg string, force bool) error {
 	if _, ok := configured[name.Leaf]; !ok {
 		return fmt.Errorf("secret %s is not configured", name.Full)
 	}
-	if !force && !isTerminal(os.Stdin) {
+	if !force && !isTerminalReader(in) {
 		return fmt.Errorf("refusing to proceed without confirmation; rerun with -f in scripts")
 	}
-	confirmed, err := confirmPrompt(bufio.NewReader(os.Stdin),
+	confirmed, err := confirmPrompt(bufio.NewReader(in), errOut,
 		fmt.Sprintf("delete %s and its keychain value? [y/N]: ", name.Full), force)
 	if err != nil {
 		return err
 	}
 	if !confirmed {
-		fmt.Fprintln(os.Stderr, "motte: aborted")
+		_, _ = fmt.Fprintln(errOut, "motte: aborted")
 		return nil
 	}
-	if err := secrets.DefaultStore.Delete(name.Full); err != nil {
+	if err := store.Delete(name.Full); err != nil {
 		return err
 	}
 	if err := secrets.RemoveMeta(name); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "motte: removed %s\n", name.Full)
+	_, _ = fmt.Fprintf(errOut, "motte: removed %s\n", name.Full)
 	return nil
 }
 
@@ -345,7 +347,7 @@ type lsRow struct {
 
 // runSecretsLs lists the secrets of the existing scope files, grouped by
 // scope, with keychain presence and the allowed hosts.
-func runSecretsLs() error {
+func runSecretsLs(out, errOut io.Writer, store secrets.Store) error {
 	root, err := config.SecretsDir()
 	if err != nil {
 		return err
@@ -355,20 +357,20 @@ func runSecretsLs() error {
 		return err
 	}
 	if len(scopes) == 0 {
-		fmt.Fprintln(os.Stderr, "no secrets configured; create one with `motte secrets add`")
+		_, _ = fmt.Fprintln(errOut, "no secrets configured; create one with `motte secrets add`")
 		return nil
 	}
 	hash, hashErr := config.DirHash()
 	var rows []lsRow
 	for i, scope := range scopes {
 		if i > 0 {
-			fmt.Println()
+			_, _ = fmt.Fprintln(out)
 		}
 		thisDir := hashErr == nil && scope.Hash != "" && scope.Hash == hash
-		fmt.Printf("%s:\n", scope.Label(thisDir))
+		_, _ = fmt.Fprintf(out, "%s:\n", scope.Label(thisDir))
 		configured, err := secrets.ReadScope(scope)
 		if err != nil {
-			fmt.Printf("  <unreadable: %v>\n", err)
+			_, _ = fmt.Fprintf(out, "  <unreadable: %v>\n", err)
 			continue
 		}
 		var group []lsRow
@@ -377,27 +379,27 @@ func runSecretsLs() error {
 			group = append(group, lsRow{
 				name:     spec.Name,
 				spec:     spec,
-				keychain: secrets.ProbeKeychain(spec.Name),
+				keychain: secrets.ProbeKeychain(store, spec.Name),
 			})
 		}
 		if len(group) == 0 {
-			fmt.Printf("  (no secrets)\n")
+			_, _ = fmt.Fprintf(out, "  (no secrets)\n")
 			continue
 		}
 		rows = append(rows, group...)
-		printLsGroup(group)
+		printLsGroup(out, group)
 	}
 	if notes := shadowNotes(rows); len(notes) > 0 {
-		fmt.Println()
+		_, _ = fmt.Fprintln(out)
 		for _, note := range notes {
-			fmt.Println(note)
+			_, _ = fmt.Fprintln(out, note)
 		}
 	}
 	return nil
 }
 
 // printLsGroup prints one scope's secrets as a table aligned by name.
-func printLsGroup(group []lsRow) {
+func printLsGroup(out io.Writer, group []lsRow) {
 	width := 0
 	for _, row := range group {
 		if len(row.name) > width {
@@ -405,7 +407,7 @@ func printLsGroup(group []lsRow) {
 		}
 	}
 	for _, row := range group {
-		fmt.Printf("  %-*s  keychain: %s  allow: %s\n",
+		_, _ = fmt.Fprintf(out, "  %-*s  keychain: %s  allow: %s\n",
 			width, row.name, row.keychain, strings.Join(row.spec.Allow, ", "))
 	}
 }
@@ -435,8 +437,8 @@ func shadowNotes(rows []lsRow) []string {
 // --- prompt helpers ---------------------------------------------------------
 
 // promptLine prints a prompt and reads one line from in.
-func promptLine(in *bufio.Reader, prompt string) (string, error) {
-	_, _ = fmt.Fprint(os.Stderr, prompt)
+func promptLine(in *bufio.Reader, errOut io.Writer, prompt string) (string, error) {
+	_, _ = fmt.Fprint(errOut, prompt)
 	line, err := in.ReadString('\n')
 	if line == "" {
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -472,16 +474,22 @@ func readSecretValue(prompt string, echo io.Writer, in io.Reader) (string, error
 }
 
 // confirmPrompt asks a yes-no question; force short-circuits it.
-func confirmPrompt(in *bufio.Reader, prompt string, force bool) (bool, error) {
+func confirmPrompt(in *bufio.Reader, errOut io.Writer, prompt string, force bool) (bool, error) {
 	if force {
 		return true, nil
 	}
-	answer, err := promptLine(in, prompt)
+	answer, err := promptLine(in, errOut, prompt)
 	if err != nil {
 		return false, err
 	}
 	answer = strings.ToLower(strings.TrimSpace(answer))
 	return answer == "y" || answer == "yes", nil
+}
+
+// isTerminalReader reports whether r is an interactive terminal file.
+func isTerminalReader(r io.Reader) bool {
+	file, ok := r.(*os.File)
+	return ok && isTerminal(file)
 }
 
 // isTerminal reports whether f is an interactive terminal.
@@ -502,10 +510,10 @@ func splitHosts(entry string) []string {
 
 // warnLargeValue warns when a value nears the size limits of keyring backends
 // (macOS items hold about 4 KiB; Windows Credential Manager about 2560 bytes).
-func warnLargeValue(value string) {
+func warnLargeValue(errOut io.Writer, value string) {
 	if len(value) > 2560 {
-		fmt.Fprintf(
-			os.Stderr,
+		_, _ = fmt.Fprintf(
+			errOut,
 			"motte: warning: the value is %d bytes; system keyring backends have small item limits (~4 KiB on macOS, ~2560 bytes on Windows)\n",
 			len(value),
 		)

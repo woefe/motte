@@ -7,7 +7,7 @@ package cli
 
 import (
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/spf13/cobra"
 	"github.com/woefe/motte/internal/config"
@@ -37,7 +37,7 @@ func policiesLsCommand() *cobra.Command {
 		Short: "list the existing policy files grouped by scope, with their entries",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPoliciesLs()
+			return runPoliciesLs(cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 }
@@ -50,14 +50,14 @@ func policiesConfigureCommand() *cobra.Command {
 		Long:  "The scope is global, project, a built-in profile name, or a project hash.",
 		Args:  singleArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPoliciesConfigure(args[0])
+			return runPoliciesConfigure(cmd.ErrOrStderr(), args[0])
 		},
 	}
 }
 
 // runPoliciesLs lists the existing policy files grouped by scope, with the
 // entries of each file.
-func runPoliciesLs() error {
+func runPoliciesLs(out, errOut io.Writer) error {
 	root, err := config.PoliciesDir()
 	if err != nil {
 		return err
@@ -67,16 +67,16 @@ func runPoliciesLs() error {
 		return err
 	}
 	if len(scopes) == 0 {
-		fmt.Fprintln(os.Stderr, "no policies configured; create one with `motte policies configure global`")
+		_, _ = fmt.Fprintln(errOut, "no policies configured; create one with `motte policies configure global`")
 		return nil
 	}
 	hash, hashErr := config.DirHash()
 	for i, scope := range scopes {
 		if i > 0 {
-			fmt.Println()
+			_, _ = fmt.Fprintln(out)
 		}
 		thisDir := hashErr == nil && scope.Hash != "" && scope.Hash == hash
-		fmt.Printf("%s:\n", scope.Label(thisDir))
+		_, _ = fmt.Fprintf(out, "%s:\n", scope.Label(thisDir))
 		path, err := policies.ScopePath(scope)
 		if err != nil {
 			return err
@@ -84,12 +84,12 @@ func runPoliciesLs() error {
 		entries, err := policies.ReadPolicyFile(path)
 		switch {
 		case err != nil:
-			fmt.Printf("  <unreadable: %v>\n", err)
+			_, _ = fmt.Fprintf(out, "  <unreadable: %v>\n", err)
 		case len(entries) == 0:
-			fmt.Printf("  (no entries)\n")
+			_, _ = fmt.Fprintf(out, "  (no entries)\n")
 		default:
 			for _, entry := range entries {
-				fmt.Printf("  %s\n", entry)
+				_, _ = fmt.Fprintf(out, "  %s\n", entry)
 			}
 		}
 	}
@@ -98,7 +98,7 @@ func runPoliciesLs() error {
 
 // runPoliciesConfigure opens a scope's policy file in the editor and
 // re-validates it afterwards.
-func runPoliciesConfigure(scopeArg string) error {
+func runPoliciesConfigure(errOut io.Writer, scopeArg string) error {
 	scope, err := config.ResolveScope(scopeArg)
 	if err != nil {
 		return err
@@ -110,6 +110,7 @@ func runPoliciesConfigure(scopeArg string) error {
 	return config.ConfigureScope(config.ScopeFile{
 		Path:   path,
 		FixCmd: fmt.Sprintf("motte policies configure %s", scopeArg),
+		ErrOut: errOut,
 		Template: func() (string, error) {
 			return policies.Template(scope)
 		},
