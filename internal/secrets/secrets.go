@@ -56,22 +56,11 @@ type Spec struct {
 	HeaderFields []string
 }
 
-// Scope distinguishes the three scopes a secret name can carry.
-type Scope int
-
-const (
-	ScopeGlobal Scope = iota
-	ScopeProfile
-	ScopeProject
-)
-
-// Name is a validated secret name plus its resolved scope parts.
+// Name is a validated secret name plus its resolved scope and leaf env var.
 type Name struct {
-	Full    string
-	Scope   Scope
-	Profile string
-	Hash    string
-	Leaf    string
+	Full  string
+	Scope config.Scope
+	Leaf  string
 }
 
 // secretLeafPattern matches the leaf (env var) segment of a secret name.
@@ -89,13 +78,12 @@ func ParseName(name string) (Name, error) {
 	n := Name{Full: name}
 	switch len(parts) {
 	case 1:
-		n.Scope = ScopeGlobal
 	case 2:
 		switch {
 		case slices.Contains(profile.Available(), parts[0]):
-			n.Scope, n.Profile = ScopeProfile, parts[0]
+			n.Scope = config.Scope{Profile: parts[0]}
 		case config.ProjectHashPattern.MatchString(parts[0]):
-			n.Scope, n.Hash = ScopeProject, parts[0]
+			n.Scope = config.Scope{Hash: parts[0]}
 		default:
 			return Name{}, fmt.Errorf(
 				"invalid secret name %q: %q is not a built-in profile (available: %s) nor a 12-hex project hash",
@@ -113,87 +101,13 @@ func ParseName(name string) (Name, error) {
 	return n, nil
 }
 
-// ScopeKey identifies a scope: the file its settings live in and the prefix
-// its secret names carry.
-type ScopeKey struct {
-	Scope   Scope
-	Profile string
-	Hash    string
-}
-
-// ScopeKeyOf returns the scope key a secret name belongs to.
-func ScopeKeyOf(n Name) ScopeKey {
-	switch n.Scope {
-	case ScopeProfile:
-		return ScopeKey{Scope: ScopeProfile, Profile: n.Profile}
-	case ScopeProject:
-		return ScopeKey{Scope: ScopeProject, Hash: n.Hash}
-	default:
-		return ScopeKey{Scope: ScopeGlobal}
-	}
-}
-
-// ScopeKeyFromArg maps a resolved configure argument to its scope key.
-func ScopeKeyFromArg(arg config.ScopeArg) ScopeKey {
-	switch {
-	case arg.Profile != "":
-		return ScopeKey{Scope: ScopeProfile, Profile: arg.Profile}
-	case arg.Hash != "":
-		return ScopeKey{Scope: ScopeProject, Hash: arg.Hash}
-	default:
-		return ScopeKey{Scope: ScopeGlobal}
-	}
-}
-
-// prefix returns the scope prefix of a secret name.
-func (k ScopeKey) prefix() string {
-	switch k.Scope {
-	case ScopeProfile:
-		return k.Profile
-	case ScopeProject:
-		return k.Hash
-	default:
-		return ""
-	}
-}
-
-// name returns the full name of a secret in the scope.
-func (k ScopeKey) name(envVar string) string {
-	if prefix := k.prefix(); prefix != "" {
-		return prefix + "/" + envVar
-	}
-	return envVar
-}
-
-// ConfigureArg renders the scope as a `motte secrets configure` argument.
-func (k ScopeKey) ConfigureArg() string {
-	switch k.Scope {
-	case ScopeProfile:
-		return k.Profile
-	case ScopeProject:
-		if hash, err := config.DirHash(); err == nil && hash == k.Hash {
-			return "project"
-		}
-		return k.Hash
-	default:
-		return "global"
-	}
-}
-
-// Path returns the file the scope's settings live in.
-func (k ScopeKey) Path() (string, error) {
+// ScopePath returns the file a scope's secret settings live in.
+func ScopePath(scope config.Scope) (string, error) {
 	root, err := config.SecretsDir()
 	if err != nil {
 		return "", err
 	}
-	name := "global.yaml"
-	switch k.Scope {
-	case ScopeProfile:
-		name = k.Profile + ".yaml"
-	case ScopeProject:
-		name = k.Hash + ".yaml"
-	}
-	return filepath.Join(root, name), nil
+	return scope.PathIn(root), nil
 }
 
 // HostEnvVar returns the host env var a resolved secret value travels in.
@@ -265,8 +179,8 @@ type secretEntryDoc struct {
 
 // ReadScope strictly decodes one scope file and returns the secrets it
 // holds, keyed by env var name. A missing file holds no secrets.
-func ReadScope(key ScopeKey) (map[string]Spec, error) {
-	path, err := key.Path()
+func ReadScope(scope config.Scope) (map[string]Spec, error) {
+	path, err := ScopePath(scope)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +225,7 @@ func ReadScope(key ScopeKey) (map[string]Spec, error) {
 			headerFields = DefaultHeaderFields
 		}
 		secrets[envVar] = Spec{
-			Name:         key.name(envVar),
+			Name:         scope.QualifiedName(envVar),
 			EnvVar:       envVar,
 			Allow:        entry.Allow,
 			HeaderFields: headerFields,
@@ -448,14 +362,10 @@ func writeSecretScope(path string, doc *yaml.Node) error {
 // Template returns the commented skeleton of a new secrets scope file. The
 // project scope of the current directory names the directory it belongs to,
 // so the file identifies its location.
-func Template(key ScopeKey) (string, error) {
-	header := fmt.Sprintf("# motte secrets — %s\n#\n", config.LabelScope(key.Profile, key.Hash, false))
-	if hash, err := config.DirHash(); err == nil && key.Scope == ScopeProject && hash == key.Hash {
-		path, err := config.ProjectPath()
-		if err != nil {
-			return "", err
-		}
-		header += fmt.Sprintf("# Project path: %s\n#\n", path)
+func Template(scope config.Scope) (string, error) {
+	header, err := scope.TemplateHeader("motte secrets")
+	if err != nil {
+		return "", err
 	}
 	return header + "# Values live in the OS keychain; set one with `motte secrets set <name>`.\n" +
 		"# This file holds the settings only:\n" +
@@ -470,8 +380,7 @@ func Template(key ScopeKey) (string, error) {
 // WriteMeta adds or replaces one secret in its scope file. The file keeps
 // the comments and the other secrets it holds.
 func WriteMeta(n Name, spec Spec) error {
-	key := ScopeKeyOf(n)
-	path, err := key.Path()
+	path, err := ScopePath(n.Scope)
 	if err != nil {
 		return err
 	}
@@ -490,8 +399,7 @@ func WriteMeta(n Name, spec Spec) error {
 // RemoveMeta deletes one secret from its scope file and removes the file
 // when it holds no secret anymore.
 func RemoveMeta(n Name) error {
-	key := ScopeKeyOf(n)
-	path, err := key.Path()
+	path, err := ScopePath(n.Scope)
 	if err != nil {
 		return err
 	}
@@ -538,19 +446,14 @@ func ValidateAllowEntry(entry string) error {
 // global secrets plus the profile's own and this directory's project secrets,
 // with project > profile > global precedence, deduplicated by env var name.
 func ScanEffective(profileName string) ([]Spec, error) {
-	hash, err := config.DirHash()
+	scopes, err := config.EffectiveScopes(profileName)
 	if err != nil {
 		return nil, err
 	}
-	keys := []ScopeKey{
-		{Scope: ScopeGlobal},
-		{Scope: ScopeProfile, Profile: profileName},
-		{Scope: ScopeProject, Hash: hash},
-	}
 	var effective []Spec
 	winner := map[string]int{} // env var -> index of the winning secret so far
-	for _, key := range keys {
-		secrets, err := ReadScope(key)
+	for _, scope := range scopes {
+		secrets, err := ReadScope(scope)
 		if err != nil {
 			return nil, err
 		}
@@ -592,7 +495,7 @@ func CountAll() (int, error) {
 	}
 	count := 0
 	for _, scope := range scopes {
-		secrets, err := ReadScope(ScopeKeyFromArg(scope))
+		secrets, err := ReadScope(scope)
 		if err != nil {
 			return 0, err
 		}

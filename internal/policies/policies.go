@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/profile"
@@ -25,23 +24,6 @@ import (
 // LabelKey is the sandbox label that carries the network policy
 // fingerprint, so a reused VM can be told that its policy changed.
 const LabelKey = "motte.policy"
-
-// policyScope is the scope a policy file applies to.
-type policyScope int
-
-const (
-	scopePolicyGlobal policyScope = iota
-	scopePolicyProfile
-	scopePolicyProject
-)
-
-// Target is a resolved policy scope: the file it lives in and the parts that
-// identify it. Build one with TargetFromArg; the fields are opaque.
-type Target struct {
-	scope   policyScope
-	profile string
-	hash    string
-}
 
 // policyFileDoc mirrors the network policies schema the launcher understands.
 type policyFileDoc struct {
@@ -53,61 +35,25 @@ type policyNetworkDoc struct {
 	Allow []string `yaml:"allow"`
 }
 
-// TargetPath maps a resolved scope to its policy file.
-func TargetPath(target Target) (string, error) {
+// ScopePath maps a scope to its policy file.
+func ScopePath(scope config.Scope) (string, error) {
 	root, err := config.PoliciesDir()
 	if err != nil {
 		return "", err
 	}
-	name := ""
-	switch target.scope {
-	case scopePolicyGlobal:
-		name = "global.yaml"
-	case scopePolicyProfile:
-		name = target.profile + ".yaml"
-	case scopePolicyProject:
-		name = target.hash + ".yaml"
-	}
-	return filepath.Join(root, name), nil
-}
-
-// TargetFromArg maps a resolved configure argument to its policy target.
-func TargetFromArg(arg config.ScopeArg) Target {
-	switch {
-	case arg.Profile != "":
-		return Target{scope: scopePolicyProfile, profile: arg.Profile}
-	case arg.Hash != "":
-		return Target{scope: scopePolicyProject, hash: arg.Hash}
-	default:
-		return Target{scope: scopePolicyGlobal}
-	}
-}
-
-// targets returns the scopes that apply to a profile launch, in merge order:
-// the global file, the profile's own file, and the current directory's
-// project file.
-func targets(profileName string) ([]Target, error) {
-	hash, err := config.DirHash()
-	if err != nil {
-		return nil, err
-	}
-	return []Target{
-		{scope: scopePolicyGlobal},
-		{scope: scopePolicyProfile, profile: profileName},
-		{scope: scopePolicyProject, hash: hash},
-	}, nil
+	return scope.PathIn(root), nil
 }
 
 // Allow returns the network.allow entries of the policy files that apply to a
 // profile launch. Missing files contribute nothing.
 func Allow(profileName string) ([]string, error) {
-	list, err := targets(profileName)
+	scopes, err := config.EffectiveScopes(profileName)
 	if err != nil {
 		return nil, err
 	}
 	var allow []string
-	for _, target := range list {
-		path, err := TargetPath(target)
+	for _, scope := range scopes {
+		path, err := ScopePath(scope)
 		if err != nil {
 			return nil, err
 		}
@@ -160,15 +106,10 @@ func ReadPolicyFile(path string) ([]string, error) {
 // Template returns the commented skeleton of a new policy file. The project
 // scope of the current directory names the directory it belongs to, so the
 // file identifies its location.
-func Template(target Target) (string, error) {
-	header := fmt.Sprintf("# motte network policy — %s\n#\n",
-		config.LabelScope(target.profile, target.hash, false))
-	if hash, err := config.DirHash(); err == nil && target.scope == scopePolicyProject && hash == target.hash {
-		path, err := config.ProjectPath()
-		if err != nil {
-			return "", err
-		}
-		header += fmt.Sprintf("# Project path: %s\n#\n", path)
+func Template(scope config.Scope) (string, error) {
+	header, err := scope.TemplateHeader("motte network policy")
+	if err != nil {
+		return "", err
 	}
 	return header + `# Entries extend the built-in egress policy; they cannot narrow it.
 # Every entry uses the microsandbox CLI rule grammar, TARGET[:PROTO[:PORTS]]:

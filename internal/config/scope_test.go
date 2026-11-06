@@ -10,9 +10,9 @@ import (
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// TestResolveScopeArg resolves scope arguments to scope keys: global, the
+// TestResolveScope resolves scope arguments to scopes: global, the
 // current project, a built-in profile, and a bare project hash.
-func TestResolveScopeArg(t *testing.T) {
+func TestResolveScope(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	hash, err := DirHash()
 	if err != nil {
@@ -20,46 +20,46 @@ func TestResolveScopeArg(t *testing.T) {
 	}
 	tests := []struct {
 		arg  string
-		want ScopeArg
+		want Scope
 	}{
-		{arg: "global", want: ScopeArg{}},
-		{arg: "project", want: ScopeArg{Hash: hash}},
-		{arg: "golang", want: ScopeArg{Profile: "golang"}},
-		{arg: "1234567890ab", want: ScopeArg{Hash: "1234567890ab"}},
+		{arg: "global", want: Scope{}},
+		{arg: "project", want: Scope{Hash: hash}},
+		{arg: "golang", want: Scope{Profile: "golang"}},
+		{arg: "1234567890ab", want: Scope{Hash: "1234567890ab"}},
 	}
 	for _, test := range tests {
 		t.Run(test.arg, func(t *testing.T) {
-			got, err := ResolveScopeArg(test.arg)
+			got, err := ResolveScope(test.arg)
 			if err != nil {
-				t.Fatalf("ResolveScopeArg: %v", err)
+				t.Fatalf("ResolveScope: %v", err)
 			}
 			if got != test.want {
-				t.Errorf("ResolveScopeArg(%q) = %+v, want %+v", test.arg, got, test.want)
+				t.Errorf("ResolveScope(%q) = %+v, want %+v", test.arg, got, test.want)
 			}
 		})
 	}
-	if _, err := ResolveScopeArg("bogus"); err == nil ||
+	if _, err := ResolveScope("bogus"); err == nil ||
 		!strings.Contains(err.Error(), "unknown scope") {
 		t.Errorf("error = %v, want an unknown-scope error", err)
 	}
 }
 
-// TestLabelScope renders each scope for listings and template headers.
-func TestLabelScope(t *testing.T) {
+// TestScopeLabel renders each scope for listings and template headers.
+func TestScopeLabel(t *testing.T) {
 	tests := []struct {
-		profile, hash string
-		thisDir       bool
-		want          string
+		scope   Scope
+		thisDir bool
+		want    string
 	}{
 		{want: "global"},
-		{profile: "golang", want: "profile golang"},
-		{hash: "1234567890ab", want: "project 1234567890ab"},
-		{hash: "1234567890ab", thisDir: true, want: "project 1234567890ab (this directory)"},
+		{scope: Scope{Profile: "golang"}, want: "profile golang"},
+		{scope: Scope{Hash: "1234567890ab"}, want: "project 1234567890ab"},
+		{scope: Scope{Hash: "1234567890ab"}, thisDir: true, want: "project 1234567890ab (this directory)"},
 	}
 	for _, test := range tests {
-		if got := LabelScope(test.profile, test.hash, test.thisDir); got != test.want {
-			t.Errorf("LabelScope(%q, %q, %v) = %q, want %q",
-				test.profile, test.hash, test.thisDir, got, test.want)
+		if got := test.scope.Label(test.thisDir); got != test.want {
+			t.Errorf("Scope(%+v).Label(%v) = %q, want %q",
+				test.scope, test.thisDir, got, test.want)
 		}
 	}
 }
@@ -81,7 +81,7 @@ func TestLsScopesSkipsNonScopeFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LsScopes: %v", err)
 	}
-	want := []ScopeArg{{}, {Profile: "golang"}, {Hash: "1234567890ab"}}
+	want := []Scope{{}, {Profile: "golang"}, {Hash: "1234567890ab"}}
 	if !slices.Equal(scopes, want) {
 		t.Errorf("scopes = %+v, want %+v", scopes, want)
 	}

@@ -24,7 +24,7 @@ func mustDirHash(t *testing.T) string {
 // when its scope file is invalid or the secret is missing.
 func readSpec(t *testing.T, n Name) Spec {
 	t.Helper()
-	secrets, err := ReadScope(ScopeKeyOf(n))
+	secrets, err := ReadScope(n.Scope)
 	if err != nil {
 		t.Fatalf("ReadScope(%s): %v", n.Full, err)
 	}
@@ -38,17 +38,15 @@ func readSpec(t *testing.T, n Name) Spec {
 // TestParseName covers the path-like name grammar per scope.
 func TestParseName(t *testing.T) {
 	tests := []struct {
-		name        string
-		wantScope   Scope
-		wantProfile string
-		wantHash    string
-		wantLeaf    string
-		wantErr     string
+		name      string
+		wantScope config.Scope
+		wantLeaf  string
+		wantErr   string
 	}{
-		{name: "EXAMPLE_API_KEY", wantScope: ScopeGlobal, wantLeaf: "EXAMPLE_API_KEY"},
-		{name: "golang/EXAMPLE_API_KEY", wantScope: ScopeProfile, wantProfile: "golang", wantLeaf: "EXAMPLE_API_KEY"},
-		{name: "web/login_token", wantScope: ScopeProfile, wantProfile: "web", wantLeaf: "login_token"},
-		{name: "1234567890ab/FOO", wantScope: ScopeProject, wantHash: "1234567890ab", wantLeaf: "FOO"},
+		{name: "EXAMPLE_API_KEY", wantScope: config.Scope{}, wantLeaf: "EXAMPLE_API_KEY"},
+		{name: "golang/EXAMPLE_API_KEY", wantScope: config.Scope{Profile: "golang"}, wantLeaf: "EXAMPLE_API_KEY"},
+		{name: "web/login_token", wantScope: config.Scope{Profile: "web"}, wantLeaf: "login_token"},
+		{name: "1234567890ab/FOO", wantScope: config.Scope{Hash: "1234567890ab"}, wantLeaf: "FOO"},
 		{name: "", wantErr: "empty secret name"},
 		{name: "golang//FOO", wantErr: "invalid secret name"},
 		{name: "a/b/c/d", wantErr: "at most two segments"},
@@ -67,10 +65,9 @@ func TestParseName(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseName(%q): %v", test.name, err)
 			}
-			if got.Scope != test.wantScope || got.Profile != test.wantProfile ||
-				got.Hash != test.wantHash || got.Leaf != test.wantLeaf {
-				t.Errorf("ParseName(%q) = %+v, want scope/profile/hash/leaf %d/%q/%q/%q",
-					test.name, got, test.wantScope, test.wantProfile, test.wantHash, test.wantLeaf)
+			if got.Scope != test.wantScope || got.Leaf != test.wantLeaf {
+				t.Errorf("ParseName(%q) = %+v, want scope/leaf %+v/%q",
+					test.name, got, test.wantScope, test.wantLeaf)
 			}
 		})
 	}
@@ -85,33 +82,33 @@ func TestSecretScopeFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name Name
-		arg  string
-		want string
+		scope config.Scope
+		arg   string
+		want  string
 	}{
-		{name: Name{Scope: ScopeGlobal}, arg: "global", want: "global.yaml"},
-		{name: Name{Scope: ScopeProfile, Profile: "golang"}, arg: "golang", want: "golang.yaml"},
-		{name: Name{Scope: ScopeProject, Hash: hash}, arg: "project", want: hash + ".yaml"},
+		{scope: config.Scope{}, arg: "global", want: "global.yaml"},
+		{scope: config.Scope{Profile: "golang"}, arg: "golang", want: "golang.yaml"},
+		{scope: config.Scope{Hash: hash}, arg: "project", want: hash + ".yaml"},
 	}
 	for _, test := range tests {
-		path, err := ScopeKeyOf(test.name).Path()
+		path, err := ScopePath(test.scope)
 		if err != nil {
-			t.Fatalf("Path: %v", err)
+			t.Fatalf("ScopePath: %v", err)
 		}
 		if filepath.Base(path) != test.want {
-			t.Errorf("Path = %q, want %q", filepath.Base(path), test.want)
+			t.Errorf("ScopePath = %q, want %q", filepath.Base(path), test.want)
 		}
 		// The commands reach the same file through their scope argument.
-		arg, err := config.ResolveScopeArg(test.arg)
+		scope, err := config.ResolveScope(test.arg)
 		if err != nil {
-			t.Fatalf("ResolveScopeArg(%q): %v", test.arg, err)
+			t.Fatalf("ResolveScope(%q): %v", test.arg, err)
 		}
-		argPath, err := ScopeKeyFromArg(arg).Path()
+		argPath, err := ScopePath(scope)
 		if err != nil {
-			t.Fatalf("Path: %v", err)
+			t.Fatalf("ScopePath: %v", err)
 		}
 		if filepath.Base(argPath) != test.want {
-			t.Errorf("Path from the %q scope = %q, want %q", test.arg, filepath.Base(argPath), test.want)
+			t.Errorf("ScopePath from the %q scope = %q, want %q", test.arg, filepath.Base(argPath), test.want)
 		}
 	}
 }
@@ -164,7 +161,7 @@ func TestReadWriteMeta(t *testing.T) {
 	// Unknown fields fail lint-style, with the path in the error.
 	testutil.WriteConfigFile(t, "secrets/golang.yaml",
 		"secrets:\n  EXAMPLE_API_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
-	_, err = ReadScope(ScopeKeyOf(name))
+	_, err = ReadScope(name.Scope)
 	if err == nil || !strings.Contains(err.Error(), "invalid secret config") || !strings.Contains(err.Error(), "alow") {
 		t.Errorf("error = %v, want an unknown-field error naming alow", err)
 	}
@@ -172,14 +169,14 @@ func TestReadWriteMeta(t *testing.T) {
 	// A missing allow list is invalid.
 	testutil.WriteConfigFile(t, "secrets/golang.yaml",
 		"secrets:\n  EXAMPLE_API_KEY:\n    header_fields: [origin]\n")
-	if _, err := ReadScope(ScopeKeyOf(name)); err == nil || !strings.Contains(err.Error(), "empty allow list") {
+	if _, err := ReadScope(name.Scope); err == nil || !strings.Contains(err.Error(), "empty allow list") {
 		t.Errorf("error = %v, want an empty-allow error", err)
 	}
 
 	// Allow hosts must be host patterns, not network rule targets.
 	testutil.WriteConfigFile(t, "secrets/golang.yaml",
 		"secrets:\n  EXAMPLE_API_KEY:\n    allow: [\"host:tcp:9931\"]\n")
-	if _, err := ReadScope(ScopeKeyOf(name)); err == nil ||
+	if _, err := ReadScope(name.Scope); err == nil ||
 		!strings.Contains(err.Error(), "invalid secret allow host") {
 		t.Errorf("error = %v, want a bad-host error", err)
 	}
@@ -258,7 +255,7 @@ func TestRemoveLastSecretRemovesTheScopeFile(t *testing.T) {
 	if _, err := os.Stat(scopePath); !os.IsNotExist(err) {
 		t.Errorf("scope file still exists: %v", err)
 	}
-	secrets, err := ReadScope(ScopeKeyOf(name))
+	secrets, err := ReadScope(name.Scope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,21 +311,21 @@ func TestScanEffectivePrecedence(t *testing.T) {
 // the project path only for the current directory's project scope.
 func TestTemplate(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	global, err := Template(ScopeKey{Scope: ScopeGlobal})
+	global, err := Template(config.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(global, "secrets:") || !strings.Contains(global, "motte secrets set") {
 		t.Errorf("global template = %q, want the settings comments", global)
 	}
-	project, err := Template(ScopeKey{Scope: ScopeProject, Hash: mustDirHash(t)})
+	project, err := Template(config.Scope{Hash: mustDirHash(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(project, "Project path: ") {
 		t.Errorf("project template = %q, want the project path", project)
 	}
-	foreign, err := Template(ScopeKey{Scope: ScopeProject, Hash: "1234567890ab"})
+	foreign, err := Template(config.Scope{Hash: "1234567890ab"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -76,8 +76,8 @@ func runPoliciesLs() error {
 			fmt.Println()
 		}
 		thisDir := hashErr == nil && scope.Hash != "" && scope.Hash == hash
-		fmt.Printf("%s:\n", config.LabelScope(scope.Profile, scope.Hash, thisDir))
-		path, err := policies.TargetPath(policies.TargetFromArg(scope))
+		fmt.Printf("%s:\n", scope.Label(thisDir))
+		path, err := policies.ScopePath(scope)
 		if err != nil {
 			return err
 		}
@@ -98,21 +98,20 @@ func runPoliciesLs() error {
 
 // runPoliciesConfigure opens a scope's policy file in the editor and
 // re-validates it afterwards.
-func runPoliciesConfigure(scope string) error {
-	arg, err := config.ResolveScopeArg(scope)
+func runPoliciesConfigure(scopeArg string) error {
+	scope, err := config.ResolveScope(scopeArg)
 	if err != nil {
 		return err
 	}
-	target := policies.TargetFromArg(arg)
-	path, err := policies.TargetPath(target)
+	path, err := policies.ScopePath(scope)
 	if err != nil {
 		return err
 	}
 	return config.ConfigureScope(config.ScopeFile{
 		Path:   path,
-		FixCmd: fmt.Sprintf("motte policies configure %s", scope),
+		FixCmd: fmt.Sprintf("motte policies configure %s", scopeArg),
 		Template: func() (string, error) {
-			return policies.Template(target)
+			return policies.Template(scope)
 		},
 		Read: func() error {
 			_, err := policies.ReadPolicyFile(path)
