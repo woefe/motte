@@ -6,7 +6,7 @@ COPY pacman-mirrorlist /etc/pacman.d/mirrorlist
 
 ENV COLORTERM=truecolor
 
-RUN pacman -Sy --noconfirm --needed \
+RUN pacman -Syu --noconfirm --needed \
         ca-certificates \
         curl \
         fd \
