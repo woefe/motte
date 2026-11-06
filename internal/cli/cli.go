@@ -13,6 +13,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/launcher"
 	"github.com/woefe/motte/internal/profile"
+	"github.com/woefe/motte/internal/secrets"
 )
 
 // exitCoder is an error that carries the exit code motte exits with. An
@@ -35,16 +37,36 @@ func (e exitCoder) Error() string { return e.message }
 // ExitCode returns the exit code the command exits with.
 func (e exitCoder) ExitCode() int { return e.code }
 
-// boot runs the profile's sandbox and returns the workload's exit code.
-// The command tree replaces it in tests.
-var boot = launcher.Boot
+// bootFunc runs a profile's sandbox and returns the workload's exit code.
+type bootFunc func(profileName string, noPull, replace bool) (int, error)
+
+// env holds the external dependencies of the CLI command tree.
+type env struct {
+	boot   bootFunc
+	store  secrets.Store
+	in     io.Reader
+	out    io.Writer
+	errOut io.Writer
+}
+
+func defaultEnv() env {
+	return env{
+		boot:   launcher.Boot,
+		store:  secrets.DefaultStore(),
+		in:     os.Stdin,
+		out:    os.Stdout,
+		errOut: os.Stderr,
+	}
+}
 
 // Run dispatches the command tree and returns the exit code.
 func Run(args []string) int {
-	root := newRootCommand()
+	return runWithEnv(args, defaultEnv())
+}
+
+func runWithEnv(args []string, e env) int {
+	root := newRootCommand(e)
 	root.SetArgs(args[1:])
-	root.SetOut(os.Stdout)
-	root.SetErr(os.Stderr)
 	err := root.Execute()
 	if err == nil {
 		return 0
@@ -55,16 +77,16 @@ func Run(args []string) int {
 	}
 	if coded, ok := errors.AsType[exitCoder](err); ok {
 		if coded.message != "" {
-			fmt.Fprintf(os.Stderr, "motte: %s\n", coded.message)
+			_, _ = fmt.Fprintf(e.errOut, "motte: %s\n", coded.message)
 		}
 		return coded.ExitCode()
 	}
-	fmt.Fprintf(os.Stderr, "motte: %v\n", err)
+	_, _ = fmt.Fprintf(e.errOut, "motte: %v\n", err)
 	return 1
 }
 
 // newRootCommand builds the motte command tree.
-func newRootCommand() *cobra.Command {
+func newRootCommand(e env) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "motte",
 		Short: "launch isolated OpenCode development environments",
@@ -75,11 +97,14 @@ func newRootCommand() *cobra.Command {
 		Args:          cobra.ArbitraryArgs,
 		RunE:          runRoot,
 	}
+	root.SetIn(e.in)
+	root.SetOut(e.out)
+	root.SetErr(e.errOut)
 	// Cobra defaults this threshold only inside its own suggestion
 	// formatting; the root command asks for the suggestions itself.
 	root.SuggestionsMinimumDistance = 2
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.AddCommand(opencodeCommand(), policiesCommand(), secretsCommand())
+	root.AddCommand(opencodeCommand(e.boot), policiesCommand(), secretsCommand(e.store))
 	return root
 }
 
@@ -104,7 +129,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 }
 
 // opencodeCommand boots a profile and attaches the OpenCode TUI to it.
-func opencodeCommand() *cobra.Command {
+func opencodeCommand(boot bootFunc) *cobra.Command {
 	var noPull, replace bool
 	cmd := &cobra.Command{
 		Use:     "opencode <profile>",

@@ -150,13 +150,15 @@ func (keyringStore) Delete(account string) error {
 	return nil
 }
 
-// DefaultStore is the process-wide keychain; tests override it.
-var DefaultStore Store = keyringStore{}
+// DefaultStore returns the OS keyring store.
+func DefaultStore() Store {
+	return keyringStore{}
+}
 
-// ProbeKeychain reports whether an account carries a secret: "yes", "no", or
-// "?" when the keychain itself could not be serviced.
-func ProbeKeychain(account string) string {
-	switch _, err := DefaultStore.Get(account); {
+// ProbeKeychain reports whether an account carries a secret in store: "yes",
+// "no", or "?" when the keychain itself could not be serviced.
+func ProbeKeychain(store Store, account string) string {
+	switch _, err := store.Get(account); {
 	case err == nil:
 		return "yes"
 	case errors.Is(err, ErrNotFound):

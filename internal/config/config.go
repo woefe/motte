@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,6 +102,7 @@ func WriteNewFile(path, contents string) error {
 type ScopeFile struct {
 	Path     string
 	FixCmd   string
+	ErrOut   io.Writer
 	Template func() (string, error)
 	Read     func() error
 }
@@ -109,6 +111,10 @@ type ScopeFile struct {
 // its template when missing, and re-reads it afterwards. A file that fails
 // to parse after editing keeps its content and exits non-zero.
 func ConfigureScope(f ScopeFile) error {
+	errOut := f.ErrOut
+	if errOut == nil {
+		errOut = os.Stderr
+	}
 	if _, err := os.Stat(f.Path); errors.Is(err, os.ErrNotExist) {
 		template, err := f.Template()
 		if err != nil {
@@ -122,11 +128,11 @@ func ConfigureScope(f ScopeFile) error {
 		return err
 	}
 	if err := f.Read(); err != nil {
-		fmt.Fprintf(os.Stderr, "motte: %s is invalid after editing: %v\n", f.Path, err)
-		fmt.Fprintf(os.Stderr, "motte: fix it with `%s`\n", f.FixCmd)
+		_, _ = fmt.Fprintf(errOut, "motte: %s is invalid after editing: %v\n", f.Path, err)
+		_, _ = fmt.Fprintf(errOut, "motte: fix it with `%s`\n", f.FixCmd)
 		return ErrInvalidAfterEdit
 	}
-	fmt.Fprintf(os.Stderr, "motte: %s is valid\n", f.Path)
+	_, _ = fmt.Fprintf(errOut, "motte: %s is valid\n", f.Path)
 	return nil
 }
 

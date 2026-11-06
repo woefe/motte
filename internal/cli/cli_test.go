@@ -1,29 +1,52 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/woefe/motte/internal/secrets"
 	"github.com/woefe/motte/internal/testutil"
 )
 
 // execute runs the command tree with args and returns the error it produced.
 func execute(t *testing.T, args ...string) error {
 	t.Helper()
-	root := newRootCommand()
+	return executeWithBoot(t, nil, args...)
+}
+
+func executeWithBoot(t *testing.T, boot bootFunc, args ...string) error {
+	t.Helper()
+	root := newRootCommand(env{
+		boot:   boot,
+		store:  testutil.NewFakeStore(secrets.ErrNotFound, nil),
+		in:     strings.NewReader(""),
+		out:    io.Discard,
+		errOut: io.Discard,
+	})
 	root.SetArgs(args)
-	root.SetOut(io.Discard)
-	root.SetErr(io.Discard)
 	return root.Execute()
+}
+
+// runCLI runs the full CLI dispatch with captured stdout and stderr.
+func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	code = runWithEnv(args, env{
+		boot:   func(string, bool, bool) (int, error) { return 0, nil },
+		store:  testutil.NewFakeStore(secrets.ErrNotFound, nil),
+		in:     strings.NewReader(""),
+		out:    &outBuf,
+		errOut: &errBuf,
+	})
+	return code, outBuf.String(), errBuf.String()
 }
 
 // TestOpenCodeBootsTheProfile checks that both command names resolve and hand
 // the profile and their flags to the boot.
 func TestOpenCodeBootsTheProfile(t *testing.T) {
-	original := boot
-	t.Cleanup(func() { boot = original })
 	tests := []struct {
 		name    string
 		args    []string
@@ -41,11 +64,11 @@ func TestOpenCodeBootsTheProfile(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var gotProfile string
 			var gotNoPull, gotReplace bool
-			boot = func(profile string, noPull, replace bool) (int, error) {
+			boot := func(profile string, noPull, replace bool) (int, error) {
 				gotProfile, gotNoPull, gotReplace = profile, noPull, replace
 				return 0, nil
 			}
-			if err := execute(t, test.args...); err != nil {
+			if err := executeWithBoot(t, boot, test.args...); err != nil {
 				t.Fatalf("execute: %v", err)
 			}
 			if gotProfile != test.profile || gotNoPull != test.noPull || gotReplace != test.replace {
@@ -171,8 +194,7 @@ func TestIncompleteCommandsPrintHelp(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var code int
-			stdout, stderr := testutil.CaptureOutput(t, func() { code = Run(test.args) })
+			code, stdout, stderr := runCLI(t, test.args...)
 			if code != 1 {
 				t.Errorf("Run(%v) = %d, want 1", test.args, code)
 			}
@@ -211,8 +233,7 @@ func TestRunExitCodes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var code int
-			_, stderr := testutil.CaptureOutput(t, func() { code = Run(test.args) })
+			code, _, stderr := runCLI(t, test.args...)
 			if code != test.want {
 				t.Errorf("Run(%v) = %d, want %d", test.args, code, test.want)
 			}
