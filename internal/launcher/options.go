@@ -27,17 +27,17 @@ func sandboxOptions(p *profile.Profile, noPull bool) ([]m.SandboxOption, error) 
 		// can be told that its policy is no longer the current one.
 		m.WithLabels(map[string]string{policies.LabelKey: policies.Fingerprint(p)}),
 	}
-	if p.CPUs != nil {
-		opts = append(opts, m.WithCPUs(*p.CPUs))
+	if p.CPUs != 0 {
+		opts = append(opts, m.WithCPUs(p.CPUs))
 	}
-	if p.MemoryMiB != nil {
-		opts = append(opts, m.WithMemory(*p.MemoryMiB))
+	if p.MemoryMiB != 0 {
+		opts = append(opts, m.WithMemory(p.MemoryMiB))
 	}
-	if p.Workdir != nil {
-		opts = append(opts, m.WithWorkdir(*p.Workdir))
+	if p.Workdir != "" {
+		opts = append(opts, m.WithWorkdir(p.Workdir))
 	}
-	if p.Shell != nil {
-		opts = append(opts, m.WithShell(*p.Shell))
+	if p.Shell != "" {
+		opts = append(opts, m.WithShell(p.Shell))
 	}
 	if len(p.Mounts) > 0 {
 		mounts := make(map[string]m.MountConfig, len(p.Mounts))
@@ -99,11 +99,11 @@ func networkConfig(n *profile.NetworkDoc) (*m.NetworkConfig, error) {
 	switch {
 	case n.Allow == nil:
 		config = &m.NetworkConfig{}
-	case len(*n.Allow) == 0:
+	case len(n.Allow) == 0:
 		config = m.NetworkPolicy.FromProfiles(m.NetworkProfilePublic)
 	default:
-		rules := make([]m.PolicyRule, 0, len(*n.Allow))
-		for _, entry := range *n.Allow {
+		rules := make([]m.PolicyRule, 0, len(n.Allow))
+		for _, entry := range n.Allow {
 			rule, err := policies.ParseAllowRule(entry)
 			if err != nil {
 				return nil, err
@@ -116,7 +116,7 @@ func networkConfig(n *profile.NetworkDoc) (*m.NetworkConfig, error) {
 			Rules:          rules,
 		}
 	}
-	if n.TLS != nil && n.TLS.Enabled != nil && *n.TLS.Enabled {
+	if n.TLS != nil && n.TLS.Enabled {
 		// Enabled with the defaults: intercept port 443, verify upstream.
 		config.TLS = &m.TLSConfig{}
 	}
