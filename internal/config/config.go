@@ -31,6 +31,36 @@ func PoliciesDir() (string, error) { return motteSubdir("policies") }
 // SecretsDir returns the root of the per-user secrets config tree.
 func SecretsDir() (string, error) { return motteSubdir("secrets") }
 
+// OpencodeDir returns the directory mounted read-only as the guest's
+// /etc/opencode.
+func OpencodeDir() (string, error) { return motteSubdir("opencode") }
+
+// defaultOpencodeConfig is the opencode.json written when none exists yet.
+const defaultOpencodeConfig = `{
+  "$schema": "https://opencode.ai/config.json"
+}
+`
+
+// EnsureOpencodeConfig returns the OpenCode config directory, creating it
+// with a default opencode.json when the file is missing. An existing file is
+// kept as is.
+func EnsureOpencodeConfig() (string, error) {
+	dir, err := OpencodeDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "opencode.json")
+	if _, err := os.Stat(path); err == nil {
+		return dir, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("checking %s: %w", path, err)
+	}
+	if err := WriteNewFile(path, defaultOpencodeConfig); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 // motteSubdir returns one of motte's config subdirectories.
 func motteSubdir(name string) (string, error) {
 	root, err := ConfigDir()

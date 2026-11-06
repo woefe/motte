@@ -45,9 +45,9 @@ func TestPolicyAllowExtendsAndDedups(t *testing.T) {
 	}
 	// Cross-scope and built-in duplicates are dropped: the list stays unique.
 	testutil.AssertAllowUnique(t, allow)
-	// 16 base + 5 golang extras + 3 unique user entries.
-	if len(allow) != 24 {
-		t.Errorf("allow len = %d, want 24", len(allow))
+	// 15 base + 5 golang extras + 3 unique user entries.
+	if len(allow) != 23 {
+		t.Errorf("allow len = %d, want 23", len(allow))
 	}
 }
 
@@ -61,8 +61,8 @@ func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProfile with an empty file: %v", err)
 	}
-	if len(*p.Network.Allow) != 17 {
-		t.Errorf("allow len = %d, want the unchanged 17", len(*p.Network.Allow))
+	if len(*p.Network.Allow) != 16 {
+		t.Errorf("allow len = %d, want the unchanged 16", len(*p.Network.Allow))
 	}
 
 	testutil.WriteConfigFile(t, "policies/web.yaml", `network:
@@ -72,8 +72,8 @@ func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProfile with an empty allow list: %v", err)
 	}
-	if len(*p.Network.Allow) != 17 {
-		t.Errorf("allow len = %d, want the unchanged 17", len(*p.Network.Allow))
+	if len(*p.Network.Allow) != 16 {
+		t.Errorf("allow len = %d, want the unchanged 16", len(*p.Network.Allow))
 	}
 	opts, err := sandboxOptions(p, false)
 	if err != nil {
@@ -158,10 +158,10 @@ func TestPolicyFingerprintChangesWithThePolicy(t *testing.T) {
 // the launch with the set hint.
 func TestResolveSecrets(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"OPENCODE_GO_KEY": "sk_test"}))
+	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "sk_test"}))
 	testutil.WriteConfigFile(t, "secrets/global.yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"*.opencode.ai\"\n")
-	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_OPENCODE_GO_KEY") })
+		"secrets:\n  EXAMPLE_API_KEY:\n    allow:\n      - \"api.example.com\"\n")
+	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_EXAMPLE_API_KEY") })
 
 	p, err := loadProfile("golang")
 	if err != nil {
@@ -171,25 +171,25 @@ func TestResolveSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveSecrets: %v", err)
 	}
-	if len(resolved) != 1 || resolved[0].Name != "OPENCODE_GO_KEY" {
+	if len(resolved) != 1 || resolved[0].Name != "EXAMPLE_API_KEY" {
 		t.Fatalf("resolveSecrets = %+v", resolved)
 	}
-	if got := os.Getenv("MOTTE_SECRET_OPENCODE_GO_KEY"); got != "sk_test" {
-		t.Errorf("MOTTE_SECRET_OPENCODE_GO_KEY = %q", got)
+	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "sk_test" {
+		t.Errorf("MOTTE_SECRET_EXAMPLE_API_KEY = %q", got)
 	}
 	// Egress auto-extends with the secrets' allow entries.
-	if !slices.Contains(*p.Network.Allow, "*.opencode.ai") {
+	if !slices.Contains(*p.Network.Allow, "api.example.com") {
 		t.Errorf("allow misses the secret's host: %v", *p.Network.Allow)
 	}
 	unsetSecretEnv(resolved)
-	if got := os.Getenv("MOTTE_SECRET_OPENCODE_GO_KEY"); got != "" {
+	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "" {
 		t.Errorf("env still set after unsetting: %q", got)
 	}
 
 	// Without a keychain value the launch fails with a set hint.
 	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, nil))
 	if _, err := resolveSecrets(p); err == nil ||
-		!strings.Contains(err.Error(), "motte secrets set OPENCODE_GO_KEY") {
+		!strings.Contains(err.Error(), "motte secrets set EXAMPLE_API_KEY") {
 		t.Errorf("error = %v, want the set hint", err)
 	}
 }

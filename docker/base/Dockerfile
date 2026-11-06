@@ -3,7 +3,6 @@ FROM archlinux:latest
 LABEL org.opencontainers.image.description="Motte sandbox base: opencode + shared tooling"
 
 COPY pacman-mirrorlist /etc/pacman.d/mirrorlist
-COPY opencode.json /etc/opencode/opencode.json
 
 ENV COLORTERM=truecolor
 

@@ -41,7 +41,7 @@ func readSpec(t *testing.T, n secrets.Name) secrets.Spec {
 // the current-directory mark, placeholder bodies, and the shadowing note.
 func TestSecretsLsListsGroups(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"OPENCODE_GO_KEY": "value"}))
+	swapStore(t, testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "value"}))
 	hash, err := config.DirHash()
 	if err != nil {
 		t.Fatal(err)
@@ -56,15 +56,15 @@ func TestSecretsLsListsGroups(t *testing.T) {
 	})
 	want := fmt.Sprintf(`global:
   ANOTHER_KEY      keychain: no  allow: a.example.com, b.example.com
-  OPENCODE_GO_KEY  keychain: yes  allow: *.opencode.ai
+  EXAMPLE_API_KEY  keychain: yes  allow: *.opencode.ai
 
 profile golang:
   (no secrets)
 
 project %s (this directory):
-  %s/OPENCODE_GO_KEY  keychain: no  allow: project.example.com
+  %s/EXAMPLE_API_KEY  keychain: no  allow: project.example.com
 
-note: OPENCODE_GO_KEY is configured in 2 scopes; the most specific wins
+note: EXAMPLE_API_KEY is configured in 2 scopes; the most specific wins
 `, hash, hash)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
@@ -302,7 +302,7 @@ func TestAddSecretOnAnEmptyScopeTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "# Values live in the OS keychain") ||
-		!strings.Contains(string(content), "# OPENCODE_GO_KEY:") {
+		!strings.Contains(string(content), "# EXAMPLE_API_KEY:") {
 		t.Errorf("scope file = %q, want the template comments", string(content))
 	}
 }

@@ -2,11 +2,13 @@ package launcher
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
+	motteconfig "github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/policies"
 	"github.com/woefe/motte/internal/profile"
 	"github.com/woefe/motte/internal/secrets"
@@ -14,9 +16,7 @@ import (
 )
 
 // assertFindRule finds a rule by destination and, when ports is non-empty, by
-// that port, then compares it field by field. The dns and host:tcp:9931
-// entries both resolve to the `host` destination, so a port selects between
-// them.
+// that port, then compares it field by field.
 func assertFindRule(t *testing.T, rules []m.PolicyRule, want m.PolicyRule, ports string) {
 	t.Helper()
 	for _, got := range rules {
@@ -157,6 +157,22 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 				t.Error("mount is readonly, want rw")
 			}
 
+			opencodeDir, err := motteconfig.OpencodeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			opencode, ok := config.Volumes["/etc/opencode"]
+			if !ok {
+				t.Fatalf("Volumes = %+v, want an /etc/opencode mount", config.Volumes)
+			}
+			if opencode.Kind() != m.MountKindBind || opencode.Bind != opencodeDir || !opencode.Readonly {
+				t.Errorf("opencode mount = %+v (bind %q), want a readonly bind of %q",
+					opencode, opencode.Bind, opencodeDir)
+			}
+			if _, err := os.Stat(filepath.Join(opencodeDir, "opencode.json")); err != nil {
+				t.Errorf("default opencode.json: %v", err)
+			}
+
 			if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
 				t.Fatalf("Network = %+v", config.Network)
 			}
@@ -165,15 +181,14 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*p.Network.Allow))
 			}
 			// Spot-check the rule kinds every profile uses: the semantic dns
-			// target, a domain suffix, and a host port.
+			// target and domain suffixes.
 			assertFindRule(t, config.Network.Rules, testutil.DNSRule, "53")
 			assertFindRule(t, config.Network.Rules, m.PolicyRule{
 				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
 			}, "")
 			assertFindRule(t, config.Network.Rules, m.PolicyRule{
-				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
-				Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Ports: []string{"9931"},
-			}, "9931")
+				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".opencode.ai",
+			}, "")
 			if config.Network.TLS == nil {
 				t.Error("Network.TLS not enabled")
 			}

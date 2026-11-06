@@ -45,8 +45,8 @@ func TestParseName(t *testing.T) {
 		wantLeaf    string
 		wantErr     string
 	}{
-		{name: "OPENCODE_GO_KEY", wantScope: ScopeGlobal, wantLeaf: "OPENCODE_GO_KEY"},
-		{name: "golang/OPENCODE_GO_KEY", wantScope: ScopeProfile, wantProfile: "golang", wantLeaf: "OPENCODE_GO_KEY"},
+		{name: "EXAMPLE_API_KEY", wantScope: ScopeGlobal, wantLeaf: "EXAMPLE_API_KEY"},
+		{name: "golang/EXAMPLE_API_KEY", wantScope: ScopeProfile, wantProfile: "golang", wantLeaf: "EXAMPLE_API_KEY"},
 		{name: "web/login_token", wantScope: ScopeProfile, wantProfile: "web", wantLeaf: "login_token"},
 		{name: "1234567890ab/FOO", wantScope: ScopeProject, wantHash: "1234567890ab", wantLeaf: "FOO"},
 		{name: "", wantErr: "empty secret name"},
@@ -135,7 +135,7 @@ func TestValidateAllowEntry(t *testing.T) {
 // unknown fields fail, allow is required, header fields default.
 func TestReadWriteMeta(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	name, err := ParseName("golang/OPENCODE_GO_KEY")
+	name, err := ParseName("golang/EXAMPLE_API_KEY")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestReadWriteMeta(t *testing.T) {
 		t.Fatalf("WriteMeta: %v", err)
 	}
 	got := readSpec(t, name)
-	if got.Name != "golang/OPENCODE_GO_KEY" || got.EnvVar != "OPENCODE_GO_KEY" ||
+	if got.Name != "golang/EXAMPLE_API_KEY" || got.EnvVar != "EXAMPLE_API_KEY" ||
 		len(got.Allow) != 1 || got.Allow[0] != "*.opencode.ai" ||
 		len(got.HeaderFields) != 1 || got.HeaderFields[0] != "authorization" {
 		t.Fatalf("readSpec = %+v", got)
@@ -156,14 +156,14 @@ func TestReadWriteMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the scope file: %v", err)
 	}
-	if !strings.Contains(string(content), "OPENCODE_GO_KEY:") ||
+	if !strings.Contains(string(content), "EXAMPLE_API_KEY:") ||
 		!strings.Contains(string(content), "*.opencode.ai") {
 		t.Errorf("scope file = %q, want the secret and its hosts", string(content))
 	}
 
 	// Unknown fields fail lint-style, with the path in the error.
 	testutil.WriteConfigFile(t, "secrets/golang.yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
+		"secrets:\n  EXAMPLE_API_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
 	_, err = ReadScope(ScopeKeyOf(name))
 	if err == nil || !strings.Contains(err.Error(), "invalid secret config") || !strings.Contains(err.Error(), "alow") {
 		t.Errorf("error = %v, want an unknown-field error naming alow", err)
@@ -171,14 +171,14 @@ func TestReadWriteMeta(t *testing.T) {
 
 	// A missing allow list is invalid.
 	testutil.WriteConfigFile(t, "secrets/golang.yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    header_fields: [origin]\n")
+		"secrets:\n  EXAMPLE_API_KEY:\n    header_fields: [origin]\n")
 	if _, err := ReadScope(ScopeKeyOf(name)); err == nil || !strings.Contains(err.Error(), "empty allow list") {
 		t.Errorf("error = %v, want an empty-allow error", err)
 	}
 
 	// Allow hosts must be host patterns, not network rule targets.
 	testutil.WriteConfigFile(t, "secrets/golang.yaml",
-		"secrets:\n  OPENCODE_GO_KEY:\n    allow: [\"host:tcp:9931\"]\n")
+		"secrets:\n  EXAMPLE_API_KEY:\n    allow: [\"host:tcp:9931\"]\n")
 	if _, err := ReadScope(ScopeKeyOf(name)); err == nil ||
 		!strings.Contains(err.Error(), "invalid secret allow host") {
 		t.Errorf("error = %v, want a bad-host error", err)
@@ -191,7 +191,7 @@ func TestReadWriteMeta(t *testing.T) {
 func TestScopeFileKeepsCommentsAndSiblings(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	testutil.WriteConfigFile(t, "secrets/golang.yaml", testutil.Fixture(t, "secrets/comments/golang.yaml"))
-	first, err := ParseName("golang/OPENCODE_GO_KEY")
+	first, err := ParseName("golang/EXAMPLE_API_KEY")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +232,8 @@ func TestScopeFileKeepsCommentsAndSiblings(t *testing.T) {
 	if strings.Contains(string(content), "OTHER_SECRET") {
 		t.Errorf("scope file = %q, want OTHER_SECRET removed", string(content))
 	}
-	if !strings.Contains(string(content), "OPENCODE_GO_KEY") {
-		t.Errorf("scope file = %q, want OPENCODE_GO_KEY kept", string(content))
+	if !strings.Contains(string(content), "EXAMPLE_API_KEY") {
+		t.Errorf("scope file = %q, want EXAMPLE_API_KEY kept", string(content))
 	}
 }
 
@@ -276,7 +276,7 @@ func TestScanEffectivePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	scopeDoc := func(allow string) string {
-		return "secrets:\n  OPENCODE_GO_KEY:\n    allow:\n      - \"" + allow + "\"\n"
+		return "secrets:\n  EXAMPLE_API_KEY:\n    allow:\n      - \"" + allow + "\"\n"
 	}
 	testutil.WriteConfigFile(t, "secrets/global.yaml", scopeDoc("global.example.com"))
 	testutil.WriteConfigFile(t, "secrets/"+hash+".yaml", scopeDoc("project.example.com"))
@@ -289,8 +289,8 @@ func TestScanEffectivePrecedence(t *testing.T) {
 	if len(effective) != 2 {
 		t.Fatalf("effective = %+v, want 2 secrets", effective)
 	}
-	if effective[0].EnvVar != "OPENCODE_GO_KEY" || effective[0].Allow[0] != "project.example.com" {
-		t.Errorf("OPENCODE_GO_KEY = %+v, want allow project.example.com", effective[0])
+	if effective[0].EnvVar != "EXAMPLE_API_KEY" || effective[0].Allow[0] != "project.example.com" {
+		t.Errorf("EXAMPLE_API_KEY = %+v, want allow project.example.com", effective[0])
 	}
 	if effective[1].EnvVar != "OTHER_SECRET" || effective[1].Allow[0] != "other.example.com" {
 		t.Errorf("OTHER_SECRET = %+v, want other.example.com", effective[1])
@@ -305,7 +305,7 @@ func TestScanEffectivePrecedence(t *testing.T) {
 	if len(effective) != 1 {
 		t.Fatalf("web effective = %+v, want only the project secret", effective)
 	}
-	if effective[0].EnvVar != "OPENCODE_GO_KEY" || effective[0].Allow[0] != "project.example.com" {
+	if effective[0].EnvVar != "EXAMPLE_API_KEY" || effective[0].Allow[0] != "project.example.com" {
 		t.Errorf("web effective = %+v, want the project secret", effective[0])
 	}
 }
@@ -341,7 +341,7 @@ func TestTemplate(t *testing.T) {
 // HostPattern objects or strings, and the injection alias.
 func TestParseStored(t *testing.T) {
 	arrayShape := `{"network":{"secrets":{"secrets":[
-		{"env_var":"OPENCODE_GO_KEY","value":"","source":{"kind":"env","var":"MOTTE_SECRET_OPENCODE_GO_KEY"},
+		{"env_var":"EXAMPLE_API_KEY","value":"","source":{"kind":"env","var":"MOTTE_SECRET_EXAMPLE_API_KEY"},
 		 "allowed_hosts":[{"wildcard":"*.opencode.ai"},{"exact":"api.example.com"}],
 		 "substitution":{"headers":true,"header_fields":["authorization"]}},
 		{"env_var":"legacy","value":"plaintext","allowed_hosts":["legacy.example.com"],
@@ -354,7 +354,7 @@ func TestParseStored(t *testing.T) {
 		t.Fatalf("stored = %+v, want 2", stored)
 	}
 	first := stored[0]
-	if first.EnvVar != "OPENCODE_GO_KEY" || first.Value != "" ||
+	if first.EnvVar != "EXAMPLE_API_KEY" || first.Value != "" ||
 		len(first.Allow) != 2 || first.Allow[0] != "*.opencode.ai" || first.Allow[1] != "api.example.com" ||
 		len(first.HeaderFields) != 1 || first.HeaderFields[0] != "authorization" {
 		t.Errorf("first = %+v", first)

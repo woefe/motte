@@ -1,5 +1,6 @@
 // The launcher: motte's boot flow. It assembles the effective profile (the
-// built-in definition with the user's network policy entries merged in),
+// built-in definition with the user's network policy entries merged in and
+// the user's OpenCode config mounted),
 // resolves the keychain secrets, creates or reuses this directory's sandbox
 // via the microsandbox Go SDK, converges the sandbox's secrets onto the
 // desired set, and attaches the terminal to the profile's workload.
@@ -11,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
@@ -83,7 +83,8 @@ func Boot(profileName string, noPull, replace bool) (int, error) {
 }
 
 // loadProfile returns the effective profile: the built-in definition with
-// the user's policy entries merged on top of the built-in egress policy.
+// the user's policy entries merged on top of the built-in egress policy and
+// the user's OpenCode config directory mounted read-only at /etc/opencode.
 func loadProfile(name string) (*profile.Profile, error) {
 	p, err := profile.Load(name)
 	if err != nil {
@@ -94,6 +95,17 @@ func loadProfile(name string) (*profile.Profile, error) {
 		return nil, err
 	}
 	p.ExtendAllow(extra)
+	opencodeDir, err := config.EnsureOpencodeConfig()
+	if err != nil {
+		return nil, err
+	}
+	p.Mounts = append(p.Mounts, profile.MountSpec{
+		HostPath:  opencodeDir,
+		GuestPath: "/etc/opencode",
+		Readonly:  true,
+		Nosuid:    true,
+		Nodev:     true,
+	})
 	return p, nil
 }
 
@@ -240,10 +252,6 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 	for _, envVar := range migrated {
 		slog.Info("migrating the stored plaintext secret to a keychain-backed env reference", "secret", envVar)
 	}
-	if slices.Contains(remove, secrets.OpencodeSecretName) {
-		slog.Info("removing the formerly built-in secret from the sandbox; re-enable it with: motte secrets add",
-			"sandbox", name, "secret", secrets.OpencodeSecretName)
-	}
 	plan, err := modder.Modify(ctx, m.ModifyOptions{
 		Secrets:       secretModifySpecs(upsert),
 		SecretsRemove: remove,
@@ -273,8 +281,7 @@ func resolveSecrets(p *profile.Profile) ([]secrets.Spec, error) {
 		return nil, err
 	}
 	if count, err := secrets.CountAll(); err == nil && count == 0 {
-		slog.Info("no secrets configured; store the OpenCode key in the OS keychain with: motte secrets add",
-			"secret", secrets.OpencodeSecretName)
+		slog.Info("no secrets configured; store API keys in the OS keychain with: motte secrets add")
 	}
 	var egress []string
 	for _, secret := range configured {
