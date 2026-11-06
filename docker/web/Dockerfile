@@ -3,7 +3,7 @@ FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.description="Motte sandbox: Python/Node toolchain"
 
-RUN pacman -Sy --noconfirm --needed \
+RUN pacman -Syu --noconfirm --needed \
         python \
         python-pip \
         nodejs \

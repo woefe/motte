@@ -3,7 +3,7 @@ FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.description="Motte sandbox: Ruby on Rails toolchain"
 
-RUN pacman -Sy --noconfirm --needed \
+RUN pacman -Syu --noconfirm --needed \
         ruby \
         sqlite \
         nodejs \
