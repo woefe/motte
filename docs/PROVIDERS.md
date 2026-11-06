@@ -1,7 +1,10 @@
 # Inference providers
 
+Inference providers are configured through `providers` in [opencode.json](https://opencode.ai/docs/providers/).
+OpenCode merges configuration from `/etc/opencode` and the current workspace (and several places more).
 Motte mounts `~/.config/motte/opencode` read-only at `/etc/opencode` in every VM.
 The `opencode.json` in that directory configures OpenCode in all your sandboxes; motte creates a minimal one on the first launch.
+You can override settings from that global config by providing an `opencode.json` in your project directory.
 The examples below add providers to that file.
 All providers can live side by side in the same `providers` section.
 
@@ -26,7 +29,7 @@ network:
     - "host:tcp:9931"
 ```
 
-Add the provider to `~/.config/motte/opencode/opencode.json`:
+Add the provider to `opencode.json`:
 
 ```json
 {
@@ -34,7 +37,7 @@ Add the provider to `~/.config/motte/opencode/opencode.json`:
   "providers": {
     "llama": {
       "name": "Llama server (host)",
-      "package": "@opencode/ai/providers/openai-compatible",
+      "package": "aisdk:@opencode/ai/providers/openai-compatible",
       "settings": {
         "baseURL": "http://host.microsandbox.internal:9931/v1",
       }
@@ -55,7 +58,7 @@ motte secrets add
 
 Enter `OPENCODE_GO_KEY` as the name and `*.opencode.ai` as the allowed hosts, then paste the key.
 
-Add the provider to `~/.config/motte/opencode/opencode.json` and reference the key as `{env:OPENCODE_GO_KEY}` in `settings.apiKey`:
+Add the provider to `opencode.json` and reference the key as `{env:OPENCODE_GO_KEY}` in `settings.apiKey`:
 
 ```json
 {

@@ -41,7 +41,7 @@ const (
 )
 
 // DefaultHeaderFields is used when a secret entry omits them.
-var DefaultHeaderFields = []string{"authorization"}
+var DefaultHeaderFields = []string{"authorization", "x-api-key"}
 
 // ErrNotFound reports a missing keychain entry.
 var ErrNotFound = errors.New("secret not found")
