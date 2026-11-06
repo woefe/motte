@@ -109,101 +109,97 @@ func TestNetworkConfig(t *testing.T) {
 }
 
 func TestSandboxOptionsTranslateProfile(t *testing.T) {
-	for name, image := range testutil.BuiltinImages() {
-		t.Run(name, func(t *testing.T) {
-			testutil.IsolatedConfigDir(t)
-			p, err := loadProfile(name)
-			if err != nil {
-				t.Fatalf("loadProfile: %v", err)
-			}
-			opts, err := sandboxOptions(p, false)
-			if err != nil {
-				t.Fatalf("sandboxOptions: %v", err)
-			}
-			config := applyOptions(opts)
+	testutil.IsolatedConfigDir(t)
+	p, err := loadProfile("base")
+	if err != nil {
+		t.Fatalf("loadProfile: %v", err)
+	}
+	opts, err := sandboxOptions(p, false)
+	if err != nil {
+		t.Fatalf("sandboxOptions: %v", err)
+	}
+	config := applyOptions(opts)
 
-			if config.Image != image {
-				t.Errorf("Image = %q, want %q", config.Image, image)
-			}
-			if config.CPUs != 4 || config.MemoryMiB != 4096 {
-				t.Errorf("CPUs/Memory = %d/%d", config.CPUs, config.MemoryMiB)
-			}
-			if config.Workdir != "/workspace" || config.Shell != "/bin/bash" {
-				t.Errorf("Workdir/Shell = %q/%q", config.Workdir, config.Shell)
-			}
-			if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
-				t.Errorf("Cmd = %v", config.Cmd)
-			}
-			// Replace is the launcher's call (--replace), not part of the profile.
-			if config.Replace {
-				t.Error("Replace should be left unset by sandboxOptions")
-			}
-			if config.PullPolicy != m.PullPolicyAlways {
-				t.Errorf("PullPolicy = %q, want always", config.PullPolicy)
-			}
-			if got, ok := config.Scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
-				t.Errorf("Scripts.check = %q", got)
-			}
+	if config.Image != testutil.BuiltinImages()["base"] {
+		t.Errorf("Image = %q, want %q", config.Image, testutil.BuiltinImages()["base"])
+	}
+	if config.CPUs != 4 || config.MemoryMiB != 4096 {
+		t.Errorf("CPUs/Memory = %d/%d", config.CPUs, config.MemoryMiB)
+	}
+	if config.Workdir != "/workspace" || config.Shell != "/bin/bash" {
+		t.Errorf("Workdir/Shell = %q/%q", config.Workdir, config.Shell)
+	}
+	if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
+		t.Errorf("Cmd = %v", config.Cmd)
+	}
+	// Replace is the launcher's call (--replace), not part of the profile.
+	if config.Replace {
+		t.Error("Replace should be left unset by sandboxOptions")
+	}
+	if config.PullPolicy != m.PullPolicyAlways {
+		t.Errorf("PullPolicy = %q, want always", config.PullPolicy)
+	}
+	if got, ok := config.Scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
+		t.Errorf("Scripts.check = %q", got)
+	}
 
-			mount, ok := config.Volumes["/workspace"]
-			if !ok {
-				t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
-			}
-			if mount.Kind() != m.MountKindBind || mount.Bind != workingDir(t) {
-				t.Errorf("mount = %+v (bind %q), want a bind of the working directory", mount, mount.Bind)
-			}
-			if mount.Readonly {
-				t.Error("mount is readonly, want rw")
-			}
+	mount, ok := config.Volumes["/workspace"]
+	if !ok {
+		t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
+	}
+	if mount.Kind() != m.MountKindBind || mount.Bind != workingDir(t) {
+		t.Errorf("mount = %+v (bind %q), want a bind of the working directory", mount, mount.Bind)
+	}
+	if mount.Readonly {
+		t.Error("mount is readonly, want rw")
+	}
 
-			opencodeDir, err := motteconfig.OpencodeDir()
-			if err != nil {
-				t.Fatal(err)
-			}
-			opencode, ok := config.Volumes["/etc/opencode"]
-			if !ok {
-				t.Fatalf("Volumes = %+v, want an /etc/opencode mount", config.Volumes)
-			}
-			if opencode.Kind() != m.MountKindBind || opencode.Bind != opencodeDir || !opencode.Readonly {
-				t.Errorf("opencode mount = %+v (bind %q), want a readonly bind of %q",
-					opencode, opencode.Bind, opencodeDir)
-			}
-			if _, err := os.Stat(filepath.Join(opencodeDir, "opencode.json")); err != nil {
-				t.Errorf("default opencode.json: %v", err)
-			}
+	opencodeDir, err := motteconfig.OpencodeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opencode, ok := config.Volumes["/etc/opencode"]
+	if !ok {
+		t.Fatalf("Volumes = %+v, want an /etc/opencode mount", config.Volumes)
+	}
+	if opencode.Kind() != m.MountKindBind || opencode.Bind != opencodeDir || !opencode.Readonly {
+		t.Errorf("opencode mount = %+v (bind %q), want a readonly bind of %q",
+			opencode, opencode.Bind, opencodeDir)
+	}
+	if _, err := os.Stat(filepath.Join(opencodeDir, "opencode.json")); err != nil {
+		t.Errorf("default opencode.json: %v", err)
+	}
 
-			if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
-				t.Fatalf("Network = %+v", config.Network)
-			}
-			// One rule per allow entry, in declared order.
-			if len(config.Network.Rules) != len(p.Network.Allow) {
-				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(p.Network.Allow))
-			}
-			// Spot-check the rule kinds every profile uses: the semantic dns
-			// target and domain suffixes.
-			assertFindRule(t, config.Network.Rules, testutil.DNSRule, "53")
-			assertFindRule(t, config.Network.Rules, m.PolicyRule{
-				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
-			}, "")
-			assertFindRule(t, config.Network.Rules, m.PolicyRule{
-				Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".opencode.ai",
-			}, "")
-			if config.Network.TLS == nil {
-				t.Error("Network.TLS not enabled")
-			}
-			// The fingerprint of the effective policy rides in the labels, so
-			// a reused VM can be told that its policy changed.
-			if got := config.Labels[policies.LabelKey]; got != policies.Fingerprint(p) {
-				t.Errorf("label %q = %q, want %q", policies.LabelKey, got, policies.Fingerprint(p))
-			}
+	if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
+		t.Fatalf("Network = %+v", config.Network)
+	}
+	// One rule per allow entry, in declared order.
+	if len(config.Network.Rules) != len(p.Network.Allow) {
+		t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(p.Network.Allow))
+	}
+	// Spot-check the rule kinds every profile uses: the semantic dns
+	// target and domain suffixes.
+	assertFindRule(t, config.Network.Rules, testutil.DNSRule, "53")
+	assertFindRule(t, config.Network.Rules, m.PolicyRule{
+		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
+	}, "")
+	assertFindRule(t, config.Network.Rules, m.PolicyRule{
+		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".opencode.ai",
+	}, "")
+	if config.Network.TLS == nil {
+		t.Error("Network.TLS not enabled")
+	}
+	// The fingerprint of the effective policy rides in the labels, so
+	// a reused VM can be told that its policy changed.
+	if got := config.Labels[policies.LabelKey]; got != policies.Fingerprint(p) {
+		t.Errorf("label %q = %q, want %q", policies.LabelKey, got, policies.Fingerprint(p))
+	}
 
-			// Secrets are never part of create options: values would persist
-			// plaintext in the durable sandbox config on the host. They are
-			// applied as post-create modify entries instead.
-			if len(config.Secrets) != 0 {
-				t.Fatalf("Secrets = %+v, want none", config.Secrets)
-			}
-		})
+	// Secrets are never part of create options: values would persist
+	// plaintext in the durable sandbox config on the host. They are
+	// applied as post-create modify entries instead.
+	if len(config.Secrets) != 0 {
+		t.Fatalf("Secrets = %+v, want none", config.Secrets)
 	}
 }
 

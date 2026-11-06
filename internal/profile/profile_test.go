@@ -8,13 +8,11 @@ import (
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// TestBuiltinProfilesLoad loads every built-in profile and checks what only
-// the profile layer carries: the profile's own name and its egress policy.
-// The settings a launch applies are checked on the sandbox config in the
-// launcher's TestSandboxOptionsTranslateProfile.
+// TestBuiltinProfilesLoad loads every built-in profile and checks what the
+// profile layer carries: the profile's own name, image, and egress policy.
 func TestBuiltinProfilesLoad(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	for name := range testutil.BuiltinImages() {
+	for name, image := range testutil.BuiltinImages() {
 		t.Run(name, func(t *testing.T) {
 			profile, err := Load(name)
 			if err != nil {
@@ -22,6 +20,9 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			}
 			if profile.Name != name {
 				t.Errorf("Name = %q, want %q", profile.Name, name)
+			}
+			if profile.Image != image {
+				t.Errorf("Image = %q, want %q", profile.Image, image)
 			}
 			if profile.Network == nil || len(profile.Network.Allow) == 0 {
 				t.Fatal("network.allow empty")
