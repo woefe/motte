@@ -26,7 +26,7 @@ func swapStore(t *testing.T, store secrets.Store) {
 // when its scope file is invalid or the secret is missing.
 func readSpec(t *testing.T, n secrets.Name) secrets.Spec {
 	t.Helper()
-	configured, err := secrets.ReadScope(secrets.ScopeKeyOf(n))
+	configured, err := secrets.ReadScope(n.Scope)
 	if err != nil {
 		t.Fatalf("ReadScope(%s): %v", n.Full, err)
 	}
@@ -124,15 +124,14 @@ func TestSecretsConfigureCreatesAndValidates(t *testing.T) {
 	if !strings.Contains(string(content), "secrets:") {
 		t.Errorf("scope file = %q, want the template", string(content))
 	}
-	if _, err := secrets.ReadScope(secrets.ScopeKey{Scope: secrets.ScopeGlobal}); err != nil {
+	if _, err := secrets.ReadScope(config.Scope{}); err != nil {
 		t.Errorf("the template does not validate: %v", err)
 	}
 
 	if err := runSecretsConfigure("project"); err != nil {
 		t.Fatalf("runSecretsConfigure(project): %v", err)
 	}
-	key := secrets.ScopeKey{Scope: secrets.ScopeProject, Hash: mustDirHash(t)}
-	projectFile, err := key.Path()
+	projectFile, err := secrets.ScopePath(config.Scope{Hash: mustDirHash(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,12 +269,12 @@ func TestAddSecretUpsert(t *testing.T) {
 // a mapping, and the template's comments survive.
 func TestAddSecretOnAnEmptyScopeTemplate(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	key := secrets.ScopeKey{Scope: secrets.ScopeGlobal}
-	path, err := key.Path()
+	scope := config.Scope{}
+	path, err := secrets.ScopePath(scope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	template, err := secrets.Template(key)
+	template, err := secrets.Template(scope)
 	if err != nil {
 		t.Fatal(err)
 	}

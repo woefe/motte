@@ -19,36 +19,18 @@ func mustDirHash(t *testing.T) string {
 	return hash
 }
 
-// TestTargetFromArg maps a resolved scope argument onto the policy file it
-// addresses.
-func TestTargetFromArg(t *testing.T) {
-	tests := []struct {
-		arg  config.ScopeArg
-		want Target
-	}{
-		{arg: config.ScopeArg{}, want: Target{scope: scopePolicyGlobal}},
-		{arg: config.ScopeArg{Profile: "golang"}, want: Target{scope: scopePolicyProfile, profile: "golang"}},
-		{arg: config.ScopeArg{Hash: "1234567890ab"}, want: Target{scope: scopePolicyProject, hash: "1234567890ab"}},
-	}
-	for _, test := range tests {
-		if got := TargetFromArg(test.arg); got != test.want {
-			t.Errorf("TargetFromArg(%+v) = %+v, want %+v", test.arg, got, test.want)
-		}
-	}
-}
-
 // TestTemplate covers the scope-file skeletons: the entry comments, and the
 // project path only for the current directory's project scope.
 func TestTemplate(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	global, err := Template(Target{scope: scopePolicyGlobal})
+	global, err := Template(config.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(global, "network:") || !strings.Contains(global, "rule grammar") {
 		t.Errorf("global template = %q, want the entry comments", global)
 	}
-	project, err := Template(Target{scope: scopePolicyProject, hash: mustDirHash(t)})
+	project, err := Template(config.Scope{Hash: mustDirHash(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +41,7 @@ func TestTemplate(t *testing.T) {
 	if !strings.Contains(project, "Project path: "+dir) {
 		t.Errorf("project template = %q, want the current directory's path", project)
 	}
-	foreign, err := Template(Target{scope: scopePolicyProject, hash: "1234567890ab"})
+	foreign, err := Template(config.Scope{Hash: "1234567890ab"})
 	if err != nil {
 		t.Fatal(err)
 	}

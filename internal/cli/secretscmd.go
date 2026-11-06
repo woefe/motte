@@ -110,8 +110,8 @@ func secretsLsCommand() *cobra.Command {
 }
 
 // configureHintErr appends the configure command that repairs a scope file.
-func configureHintErr(key secrets.ScopeKey, err error) error {
-	return fmt.Errorf("%w; fix it with `motte secrets configure %s`", err, key.ConfigureArg())
+func configureHintErr(scope config.Scope, err error) error {
+	return fmt.Errorf("%w; fix it with `motte secrets configure %s`", err, scope.ConfigureArg())
 }
 
 // runSecretsAdd interactively creates or changes a secret.
@@ -145,10 +145,9 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 	if err != nil {
 		return err
 	}
-	key := secrets.ScopeKeyOf(name)
-	configured, err := secrets.ReadScope(key)
+	configured, err := secrets.ReadScope(name.Scope)
 	if err != nil {
-		return configureHintErr(key, err)
+		return configureHintErr(name.Scope, err)
 	}
 	spec, exists := configured[name.Leaf]
 	if !exists {
@@ -208,7 +207,7 @@ func addSecret(in *bufio.Reader, valueIn io.Reader) error {
 		verb = "stored"
 	}
 	fmt.Fprintf(os.Stderr, "motte: %s %s (%s); config at %s\n",
-		verb, name.Full, scopeLabel(name), secretsConfigHint(name))
+		verb, name.Full, name.Scope.Label(false), secretsConfigHint(name))
 	return nil
 }
 
@@ -256,10 +255,9 @@ func runSecretsSet(nameArg string) error {
 	if err != nil {
 		return err
 	}
-	key := secrets.ScopeKeyOf(name)
-	configured, err := secrets.ReadScope(key)
+	configured, err := secrets.ReadScope(name.Scope)
 	if err != nil {
-		return configureHintErr(key, err)
+		return configureHintErr(name.Scope, err)
 	}
 	if _, ok := configured[name.Leaf]; !ok {
 		return fmt.Errorf("secret %s is not configured; create it with `motte secrets add`", name.Full)
@@ -281,24 +279,23 @@ func runSecretsSet(nameArg string) error {
 
 // runSecretsConfigure opens a scope's secrets file in the editor, creating it
 // from the template when missing, and re-validates it afterwards.
-func runSecretsConfigure(scope string) error {
-	arg, err := config.ResolveScopeArg(scope)
+func runSecretsConfigure(scopeArg string) error {
+	scope, err := config.ResolveScope(scopeArg)
 	if err != nil {
 		return err
 	}
-	key := secrets.ScopeKeyFromArg(arg)
-	path, err := key.Path()
+	path, err := secrets.ScopePath(scope)
 	if err != nil {
 		return err
 	}
 	return config.ConfigureScope(config.ScopeFile{
 		Path:   path,
-		FixCmd: fmt.Sprintf("motte secrets configure %s", scope),
+		FixCmd: fmt.Sprintf("motte secrets configure %s", scopeArg),
 		Template: func() (string, error) {
-			return secrets.Template(key)
+			return secrets.Template(scope)
 		},
 		Read: func() error {
-			_, err := secrets.ReadScope(key)
+			_, err := secrets.ReadScope(scope)
 			return err
 		},
 	})
@@ -310,10 +307,9 @@ func runSecretsRm(nameArg string, force bool) error {
 	if err != nil {
 		return err
 	}
-	key := secrets.ScopeKeyOf(name)
-	configured, err := secrets.ReadScope(key)
+	configured, err := secrets.ReadScope(name.Scope)
 	if err != nil {
-		return configureHintErr(key, err)
+		return configureHintErr(name.Scope, err)
 	}
 	if _, ok := configured[name.Leaf]; !ok {
 		return fmt.Errorf("secret %s is not configured", name.Full)
@@ -368,10 +364,9 @@ func runSecretsLs() error {
 		if i > 0 {
 			fmt.Println()
 		}
-		key := secrets.ScopeKeyFromArg(scope)
 		thisDir := hashErr == nil && scope.Hash != "" && scope.Hash == hash
-		fmt.Printf("%s:\n", config.LabelScope(scope.Profile, scope.Hash, thisDir))
-		configured, err := secrets.ReadScope(key)
+		fmt.Printf("%s:\n", scope.Label(thisDir))
+		configured, err := secrets.ReadScope(scope)
 		if err != nil {
 			fmt.Printf("  <unreadable: %v>\n", err)
 			continue
@@ -517,15 +512,9 @@ func warnLargeValue(value string) {
 	}
 }
 
-// scopeLabel renders a secret's scope for one-line notices.
-func scopeLabel(n secrets.Name) string {
-	key := secrets.ScopeKeyOf(n)
-	return config.LabelScope(key.Profile, key.Hash, false)
-}
-
 // secretsConfigHint names a secret's scope file for interactive messages.
 func secretsConfigHint(n secrets.Name) string {
-	if path, err := secrets.ScopeKeyOf(n).Path(); err == nil {
+	if path, err := secrets.ScopePath(n.Scope); err == nil {
 		return path
 	}
 	return n.Full

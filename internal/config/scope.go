@@ -49,56 +49,134 @@ func DirHash() (string, error) {
 	return hex.EncodeToString(sum[:6]), nil
 }
 
-// ScopeArg is a resolved configure argument: exactly one field is set —
-// profile, hash, or neither for the global scope.
-type ScopeArg struct {
+// Scope identifies a configuration scope: global (both fields empty),
+// a built-in profile (Profile set), or a project directory (Hash set).
+type Scope struct {
 	Profile string
 	Hash    string
 }
 
-// ResolveScopeArg resolves a configure argument: "global", "project", a
+// ResolveScope resolves a configure argument: "global", "project", a
 // built-in profile name, or a 12-hex project hash.
-func ResolveScopeArg(arg string) (ScopeArg, error) {
+func ResolveScope(arg string) (Scope, error) {
 	switch {
 	case arg == "global":
-		return ScopeArg{}, nil
+		return Scope{}, nil
 	case arg == "project":
 		hash, err := DirHash()
 		if err != nil {
-			return ScopeArg{}, err
+			return Scope{}, err
 		}
-		return ScopeArg{Hash: hash}, nil
+		return Scope{Hash: hash}, nil
 	case slices.Contains(profile.Available(), arg):
-		return ScopeArg{Profile: arg}, nil
+		return Scope{Profile: arg}, nil
 	case ProjectHashPattern.MatchString(arg):
-		return ScopeArg{Hash: arg}, nil
+		return Scope{Hash: arg}, nil
 	default:
-		return ScopeArg{}, fmt.Errorf(
+		return Scope{}, fmt.Errorf(
 			"unknown scope %q; expected global, project, a profile (%s), or a project hash",
 			arg, strings.Join(profile.Available(), ", "))
 	}
 }
 
-// LabelScope renders a scope for listings and template headers: "global",
-// "profile <name>", or "project <hash>"; thisDir marks the current
-// directory's project.
-func LabelScope(profileName, hash string, thisDir bool) string {
+// EffectiveScopes returns the scopes that apply to a profile launch in merge
+// order: the global scope, the profile's own scope, and the current
+// directory's project scope.
+func EffectiveScopes(profileName string) ([]Scope, error) {
+	hash, err := DirHash()
+	if err != nil {
+		return nil, err
+	}
+	return []Scope{
+		{},
+		{Profile: profileName},
+		{Hash: hash},
+	}, nil
+}
+
+// Prefix returns the scope prefix of a path-like name: "" for global, the
+// profile name, or the project hash.
+func (s Scope) Prefix() string {
 	switch {
-	case profileName != "":
-		return "profile " + profileName
-	case hash != "":
-		if thisDir {
-			return "project " + hash + " (this directory)"
+	case s.Profile != "":
+		return s.Profile
+	case s.Hash != "":
+		return s.Hash
+	default:
+		return ""
+	}
+}
+
+// QualifiedName prefixes leaf with the scope prefix when non-global.
+func (s Scope) QualifiedName(leaf string) string {
+	if prefix := s.Prefix(); prefix != "" {
+		return prefix + "/" + leaf
+	}
+	return leaf
+}
+
+// ConfigureArg renders the scope as a `configure` CLI argument.
+func (s Scope) ConfigureArg() string {
+	switch {
+	case s.Profile != "":
+		return s.Profile
+	case s.Hash != "":
+		if hash, err := DirHash(); err == nil && hash == s.Hash {
+			return "project"
 		}
-		return "project " + hash
+		return s.Hash
 	default:
 		return "global"
 	}
 }
 
+// FileName returns the YAML file basename for the scope.
+func (s Scope) FileName() string {
+	if prefix := s.Prefix(); prefix != "" {
+		return prefix + ".yaml"
+	}
+	return "global.yaml"
+}
+
+// PathIn joins the scope's YAML file basename onto root.
+func (s Scope) PathIn(root string) string {
+	return filepath.Join(root, s.FileName())
+}
+
+// Label renders the scope for listings and template headers: "global",
+// "profile <name>", or "project <hash>"; thisDir marks the current
+// directory's project.
+func (s Scope) Label(thisDir bool) string {
+	switch {
+	case s.Profile != "":
+		return "profile " + s.Profile
+	case s.Hash != "":
+		if thisDir {
+			return "project " + s.Hash + " (this directory)"
+		}
+		return "project " + s.Hash
+	default:
+		return "global"
+	}
+}
+
+// TemplateHeader renders the commented header of a new scope file, naming the
+// directory when the scope is the current directory's project scope.
+func (s Scope) TemplateHeader(kind string) (string, error) {
+	header := fmt.Sprintf("# %s — %s\n#\n", kind, s.Label(false))
+	if hash, err := DirHash(); err == nil && s.Hash != "" && hash == s.Hash {
+		path, err := ProjectPath()
+		if err != nil {
+			return "", err
+		}
+		header += fmt.Sprintf("# Project path: %s\n#\n", path)
+	}
+	return header, nil
+}
+
 // LsScopes returns the scopes that have a file in a config tree, ordered:
 // the global scope, the built-in profiles, then the projects sorted by hash.
-func LsScopes(root string) ([]ScopeArg, error) {
+func LsScopes(root string) ([]Scope, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -113,13 +191,13 @@ func LsScopes(root string) ([]ScopeArg, error) {
 		}
 		existing[strings.TrimSuffix(entry.Name(), ".yaml")] = true
 	}
-	var scopes []ScopeArg
+	var scopes []Scope
 	if existing["global"] {
-		scopes = append(scopes, ScopeArg{})
+		scopes = append(scopes, Scope{})
 	}
 	for _, name := range profile.Available() {
 		if existing[name] {
-			scopes = append(scopes, ScopeArg{Profile: name})
+			scopes = append(scopes, Scope{Profile: name})
 		}
 	}
 	var hashes []string
@@ -130,7 +208,7 @@ func LsScopes(root string) ([]ScopeArg, error) {
 	}
 	sort.Strings(hashes)
 	for _, hash := range hashes {
-		scopes = append(scopes, ScopeArg{Hash: hash})
+		scopes = append(scopes, Scope{Hash: hash})
 	}
 	return scopes, nil
 }
