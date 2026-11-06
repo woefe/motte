@@ -123,6 +123,8 @@ func ConfigureScope(f ScopeFile) error {
 		if err := WriteNewFile(f.Path, template); err != nil {
 			return err
 		}
+	} else if err != nil {
+		return fmt.Errorf("checking %s: %w", f.Path, err)
 	}
 	if err := runEditor(f.Path); err != nil {
 		return err
