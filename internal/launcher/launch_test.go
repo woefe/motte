@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
@@ -183,5 +184,47 @@ func TestResolveSecrets(t *testing.T) {
 	if _, err := resolveSecrets(p, emptyStore); err == nil ||
 		!strings.Contains(err.Error(), "motte secrets set EXAMPLE_API_KEY") {
 		t.Errorf("error = %v, want the set hint", err)
+	}
+}
+
+// TestLogCreationProgress logs each stage once despite repeated events, and
+// closes the returned channel after the event stream drains.
+func TestLogCreationProgress(t *testing.T) {
+	events := make(chan m.CreationProgress, 8)
+	for _, kind := range []string{"pull", "pull", "startup", "startup"} {
+		events <- m.CreationProgress{Kind: kind}
+	}
+	close(events)
+
+	buf := testutil.SwapLogger(t)
+	done := logCreationProgress(events)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("done did not close after the event stream drained")
+	}
+	for _, msg := range []string{"pulling image", "booting sandbox"} {
+		if got := strings.Count(buf.String(), msg); got != 1 {
+			t.Errorf("%q logged %d times, want once; log: %s", msg, got, buf.String())
+		}
+	}
+}
+
+// TestLogCreationProgressSkipsUnknownKinds: unknown kinds log nothing but
+// still drain and close the channel.
+func TestLogCreationProgressSkipsUnknownKinds(t *testing.T) {
+	events := make(chan m.CreationProgress, 2)
+	events <- m.CreationProgress{Kind: "layer"}
+	close(events)
+
+	buf := testutil.SwapLogger(t)
+	done := logCreationProgress(events)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("done did not close after the event stream drained")
+	}
+	if got := buf.String(); got != "" {
+		t.Errorf("log for unknown events = %q, want empty", got)
 	}
 }
