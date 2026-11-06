@@ -66,7 +66,8 @@ var builtins = map[string]func() *Profile{
 }
 
 // Load returns the built-in profile name with the launch-time parts
-// resolved: relative mount sources joined against the working directory.
+// resolved: relative mount sources joined against the symlink-resolved
+// working directory.
 func Load(name string) (*Profile, error) {
 	build, ok := builtins[name]
 	if !ok {
@@ -77,8 +78,12 @@ func Load(name string) (*Profile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving the working directory: %w", err)
 	}
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return nil, fmt.Errorf("resolving symlinks in %s: %w", cwd, err)
+	}
 	p := build()
-	if err := p.resolve(cwd); err != nil {
+	if err := p.resolve(resolved); err != nil {
 		return nil, err
 	}
 	return p, nil

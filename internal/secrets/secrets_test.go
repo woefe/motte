@@ -147,8 +147,15 @@ func TestReadWriteMeta(t *testing.T) {
 		t.Fatalf("readSpec = %+v", got)
 	}
 
-	// The secret lives in the profile's scope file.
+	// The secret lives in the profile's scope file with 0600 permissions.
 	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
+	info, err := os.Stat(scopePath)
+	if err != nil {
+		t.Fatalf("statting the scope file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("scope file mode = %#o, want 0600", perm)
+	}
 	content, err := os.ReadFile(scopePath)
 	if err != nil {
 		t.Fatalf("reading the scope file: %v", err)

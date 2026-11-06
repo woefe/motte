@@ -336,7 +336,7 @@ func removeSecretEntry(mapping *yaml.Node, envVar string) bool {
 	return false
 }
 
-// writeSecretScope writes a scope document atomically.
+// writeSecretScope writes a scope document atomically with 0600 permissions.
 func writeSecretScope(path string, doc *yaml.Node) error {
 	var buf bytes.Buffer
 	encoder := yaml.NewEncoder(&buf)
@@ -347,15 +347,33 @@ func writeSecretScope(path string, doc *yaml.Node) error {
 	if err := encoder.Close(); err != nil {
 		return fmt.Errorf("serializing secret config %s: %w", path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return fmt.Errorf("writing secret config %s: %w", path, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return fmt.Errorf("setting the mode of %s: %w", path, err)
+	}
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		cleanup()
+		return fmt.Errorf("writing secret config %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("writing secret config %s: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("writing secret config %s: %w", path, err)
 	}
 	return nil

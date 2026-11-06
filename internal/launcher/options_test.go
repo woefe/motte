@@ -41,13 +41,13 @@ func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
 	return config
 }
 
-// workingDir returns the test process's working directory: the base the
-// launcher resolves relative mount sources against.
+// workingDir returns the test process's resolved working directory: the base
+// the launcher resolves relative mount sources against.
 func workingDir(t *testing.T) string {
 	t.Helper()
-	wd, err := os.Getwd()
+	wd, err := motteconfig.ProjectPath()
 	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
+		t.Fatalf("ProjectPath: %v", err)
 	}
 	return wd
 }
