@@ -324,3 +324,24 @@ func createSandbox(ctx context.Context, name string, opts []m.SandboxOption) (*m
 	}
 	return result.Sandbox, nil
 }
+
+// logCreationProgress logs the image pulling and VM creation.
+// Returns a channel closed when the event stream is drained.
+func logCreationProgress(events <-chan m.CreationProgress) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pulled := false
+		booted := false
+		for event := range events {
+			if event.Kind == "pull" && !pulled {
+				pulled = true
+				slog.Info("pulling image")
+			} else if event.Kind == "startup" && !booted {
+				booted = true
+				slog.Info("booting sandbox")
+			}
+		}
+	}()
+	return done
+}
