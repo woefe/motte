@@ -19,4 +19,7 @@ RUN pacman -Syu --noconfirm --needed \
         podman-docker \
         ripgrep \
         base-devel \
-    && rm -rf /var/cache/pacman/pkg/*
+    && rm -rf /var/cache/pacman/pkg/* \
+    && useradd --create-home --uid 1000 --shell /bin/bash motte
+
+USER 1000:1000
