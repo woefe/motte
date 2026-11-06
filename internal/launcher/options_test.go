@@ -53,11 +53,10 @@ func workingDir(t *testing.T) string {
 }
 
 func TestNetworkConfig(t *testing.T) {
-	enabled := true
 	allowList := []string{"dns", "*.github.com"}
 
 	// No allow list: the runtime's default policy, with TLS when enabled.
-	config, err := networkConfig(&profile.NetworkDoc{TLS: &profile.TLSDoc{Enabled: &enabled}})
+	config, err := networkConfig(&profile.NetworkDoc{TLS: &profile.TLSDoc{Enabled: true}})
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -69,7 +68,7 @@ func TestNetworkConfig(t *testing.T) {
 	}
 
 	// An explicit empty allow list resolves to the default public profile.
-	config, err = networkConfig(&profile.NetworkDoc{Allow: &[]string{}})
+	config, err = networkConfig(&profile.NetworkDoc{Allow: []string{}})
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -90,7 +89,7 @@ func TestNetworkConfig(t *testing.T) {
 	}
 
 	// A non-empty allow list is an egress allowlist with translated rules.
-	config, err = networkConfig(&profile.NetworkDoc{Allow: &allowList, TLS: &profile.TLSDoc{Enabled: &enabled}})
+	config, err = networkConfig(&profile.NetworkDoc{Allow: allowList, TLS: &profile.TLSDoc{Enabled: true}})
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -177,8 +176,8 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 				t.Fatalf("Network = %+v", config.Network)
 			}
 			// One rule per allow entry, in declared order.
-			if len(config.Network.Rules) != len(*p.Network.Allow) {
-				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(*p.Network.Allow))
+			if len(config.Network.Rules) != len(p.Network.Allow) {
+				t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(p.Network.Allow))
 			}
 			// Spot-check the rule kinds every profile uses: the semantic dns
 			// target and domain suffixes.

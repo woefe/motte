@@ -127,13 +127,11 @@ network:
 func Fingerprint(p *profile.Profile) string {
 	digest := sha256.New()
 	if p.Network != nil {
-		if p.Network.Allow != nil {
-			for _, entry := range *p.Network.Allow {
-				_, _ = fmt.Fprintf(digest, "%s\n", entry)
-			}
+		for _, entry := range p.Network.Allow {
+			_, _ = fmt.Fprintf(digest, "%s\n", entry)
 		}
-		if p.Network.TLS != nil && p.Network.TLS.Enabled != nil {
-			_, _ = fmt.Fprintf(digest, "tls=%t\n", *p.Network.TLS.Enabled)
+		if p.Network.TLS != nil {
+			_, _ = fmt.Fprintf(digest, "tls=%t\n", p.Network.TLS.Enabled)
 		}
 	}
 	return hex.EncodeToString(digest.Sum(nil)[:8])

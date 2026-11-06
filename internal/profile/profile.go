@@ -22,10 +22,10 @@ import (
 type Profile struct {
 	Name      string
 	Image     string
-	CPUs      *uint8
-	MemoryMiB *uint32
-	Workdir   *string
-	Shell     *string
+	CPUs      uint8
+	MemoryMiB uint32
+	Workdir   string
+	Shell     string
 	Mounts    []MountSpec
 	Cmd       []string
 	Scripts   map[string]string
@@ -36,14 +36,14 @@ type Profile struct {
 // grammar (a non-empty list implies deny-by-default egress, like the CLI) and
 // the TLS interception toggle.
 type NetworkDoc struct {
-	Allow *[]string `yaml:"-"`
-	TLS   *TLSDoc   `yaml:"-"`
+	Allow []string
+	TLS   *TLSDoc
 }
 
 // TLSDoc is the TLS interception toggle; enabled turns on interception with
 // its defaults.
 type TLSDoc struct {
-	Enabled *bool
+	Enabled bool
 }
 
 // MountSpec is one bind-mount declaration. HostPath may be relative and is
@@ -140,10 +140,10 @@ var baseAllow = []string{
 // only (the secrets package).
 func base() *Profile {
 	p := &Profile{
-		CPUs:      new(uint8(4)),
-		MemoryMiB: new(uint32(4096)), // 4G
-		Workdir:   new("/workspace"),
-		Shell:     new("/bin/bash"),
+		CPUs:      4,
+		MemoryMiB: 4096, // 4G
+		Workdir:   "/workspace",
+		Shell:     "/bin/bash",
 		// The directory motte was started in, resolved at launch.
 		Mounts: []MountSpec{{HostPath: "./", GuestPath: "/workspace"}},
 		Cmd:    []string{"opencode"},
@@ -151,7 +151,7 @@ func base() *Profile {
 			// Connectivity check: the opencode version.
 			"check": "opencode --version",
 		},
-		Network: &NetworkDoc{TLS: &TLSDoc{Enabled: new(true)}},
+		Network: &NetworkDoc{TLS: &TLSDoc{Enabled: true}},
 	}
 	p.ExtendAllow(baseAllow)
 	return p
@@ -164,17 +164,14 @@ func (p *Profile) ExtendAllow(entries []string) {
 	if p.Network == nil {
 		p.Network = &NetworkDoc{}
 	}
-	var allow []string
-	if p.Network.Allow != nil {
-		allow = append(allow, *p.Network.Allow...)
-	}
+	allow := slices.Clone(p.Network.Allow)
 	for _, entry := range entries {
 		if slices.Contains(allow, entry) {
 			continue
 		}
 		allow = append(allow, entry)
 	}
-	p.Network.Allow = &allow
+	p.Network.Allow = allow
 }
 
 // baseProfile extends base() with the bare base image: the shared tooling

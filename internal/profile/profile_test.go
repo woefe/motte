@@ -23,13 +23,12 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			if profile.Name != name {
 				t.Errorf("Name = %q, want %q", profile.Name, name)
 			}
-			if profile.Network == nil || profile.Network.Allow == nil ||
-				len(*profile.Network.Allow) == 0 {
+			if profile.Network == nil || len(profile.Network.Allow) == 0 {
 				t.Fatal("network.allow empty")
 			}
 			// Every profile extends the base policy; extras stay in their owning
 			// profiles, and nothing repeats.
-			testutil.AssertAllowListed(t, *profile.Network.Allow,
+			testutil.AssertAllowListed(t, profile.Network.Allow,
 				"dns", "*.github.com", "*.opencode.ai", "pypi.org")
 			// registry.npmjs.org serves the node toolchain in web and rails.
 			exclusive := map[string][]string{
@@ -39,18 +38,18 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 				"index.rubygems.org": {"rails"},
 			}
 			for target, owners := range exclusive {
-				if slices.Contains(owners, name) && !slices.Contains(*profile.Network.Allow, target) {
+				if slices.Contains(owners, name) && !slices.Contains(profile.Network.Allow, target) {
 					t.Errorf("%s: allow misses its extra %q", name, target)
 				}
-				if !slices.Contains(owners, name) && slices.Contains(*profile.Network.Allow, target) {
+				if !slices.Contains(owners, name) && slices.Contains(profile.Network.Allow, target) {
 					t.Errorf("%s: allow carries %s's extra %q", name, strings.Join(owners, ","), target)
 				}
 			}
 			wantLen := map[string]int{"base": 15, "golang": 20, "rails": 18, "web": 16}[name]
-			if len(*profile.Network.Allow) != wantLen {
-				t.Errorf("allow len = %d, want %d", len(*profile.Network.Allow), wantLen)
+			if len(profile.Network.Allow) != wantLen {
+				t.Errorf("allow len = %d, want %d", len(profile.Network.Allow), wantLen)
 			}
-			testutil.AssertAllowUnique(t, *profile.Network.Allow)
+			testutil.AssertAllowUnique(t, profile.Network.Allow)
 		})
 	}
 }

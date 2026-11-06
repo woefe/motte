@@ -36,7 +36,7 @@ func TestPolicyAllowExtendsAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProfile: %v", err)
 	}
-	allow := *p.Network.Allow
+	allow := p.Network.Allow
 	// Built-ins stay first; the user entries append last, global before
 	// profile before project.
 	if got := allow[len(allow)-3:]; got[0] != "extra.example.com" ||
@@ -61,8 +61,8 @@ func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProfile with an empty file: %v", err)
 	}
-	if len(*p.Network.Allow) != 16 {
-		t.Errorf("allow len = %d, want the unchanged 16", len(*p.Network.Allow))
+	if len(p.Network.Allow) != 16 {
+		t.Errorf("allow len = %d, want the unchanged 16", len(p.Network.Allow))
 	}
 
 	testutil.WriteConfigFile(t, "policies/web.yaml", `network:
@@ -72,8 +72,8 @@ func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProfile with an empty allow list: %v", err)
 	}
-	if len(*p.Network.Allow) != 16 {
-		t.Errorf("allow len = %d, want the unchanged 16", len(*p.Network.Allow))
+	if len(p.Network.Allow) != 16 {
+		t.Errorf("allow len = %d, want the unchanged 16", len(p.Network.Allow))
 	}
 	opts, err := sandboxOptions(p, false)
 	if err != nil {
@@ -178,8 +178,8 @@ func TestResolveSecrets(t *testing.T) {
 		t.Errorf("MOTTE_SECRET_EXAMPLE_API_KEY = %q", got)
 	}
 	// Egress auto-extends with the secrets' allow entries.
-	if !slices.Contains(*p.Network.Allow, "api.example.com") {
-		t.Errorf("allow misses the secret's host: %v", *p.Network.Allow)
+	if !slices.Contains(p.Network.Allow, "api.example.com") {
+		t.Errorf("allow misses the secret's host: %v", p.Network.Allow)
 	}
 	unsetSecretEnv(resolved)
 	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "" {
