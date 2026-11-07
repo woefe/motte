@@ -15,7 +15,7 @@ import (
 	"slices"
 	"testing"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 )
 
 // IsolatedConfigDir points XDG_CONFIG_HOME at a fresh temp dir so tests never
@@ -101,17 +101,17 @@ func BuiltinImages() map[string]string {
 }
 
 // DNSRule is the expansion every plain dns entry shares.
-var DNSRule = m.PolicyRule{
-	Action:      m.PolicyActionAllow,
-	Direction:   m.PolicyDirectionEgress,
+var DNSRule = msb.PolicyRule{
+	Action:      msb.PolicyActionAllow,
+	Direction:   msb.PolicyDirectionEgress,
 	Destination: "host",
-	Protocols:   []m.PolicyProtocol{m.PolicyProtocolUDP, m.PolicyProtocolTCP},
+	Protocols:   []msb.PolicyProtocol{msb.PolicyProtocolUDP, msb.PolicyProtocolTCP},
 	Port:        "53",
 }
 
 // AssertRule compares policy rules field by field; PolicyRule holds slices
 // and is not comparable with ==.
-func AssertRule(t *testing.T, got, want m.PolicyRule) {
+func AssertRule(t *testing.T, got, want msb.PolicyRule) {
 	t.Helper()
 	if got.Action != want.Action || got.Direction != want.Direction || got.Destination != want.Destination {
 		t.Errorf("rule = {action %v, direction %v, destination %q}, want {%v %v %q}",

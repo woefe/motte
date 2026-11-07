@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/testutil"
 )
@@ -13,9 +13,9 @@ import (
 // TestLogCreationProgress logs each stage once despite repeated events, and
 // closes the returned channel after the event stream drains.
 func TestLogCreationProgress(t *testing.T) {
-	events := make(chan m.CreationProgress, 8)
+	events := make(chan msb.CreationProgress, 8)
 	for _, kind := range []string{"pull", "pull", "startup", "startup"} {
-		events <- m.CreationProgress{Kind: kind}
+		events <- msb.CreationProgress{Kind: kind}
 	}
 	close(events)
 
@@ -36,8 +36,8 @@ func TestLogCreationProgress(t *testing.T) {
 // TestLogCreationProgressSkipsUnknownKinds: unknown kinds log nothing but
 // still drain and close the channel.
 func TestLogCreationProgressSkipsUnknownKinds(t *testing.T) {
-	events := make(chan m.CreationProgress, 2)
-	events <- m.CreationProgress{Kind: "layer"}
+	events := make(chan msb.CreationProgress, 2)
+	events <- msb.CreationProgress{Kind: "layer"}
 	close(events)
 
 	buf := testutil.SwapLogger(t)

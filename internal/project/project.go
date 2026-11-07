@@ -19,7 +19,7 @@ import (
 	"slices"
 	"strings"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/policies"
 	"github.com/woefe/motte/internal/secrets"
@@ -109,7 +109,7 @@ type Resolved struct {
 	Image        string
 	WorkspaceDir string
 	OpencodeDir  string
-	Rules        []m.PolicyRule
+	Rules        []msb.PolicyRule
 	Fingerprint  string
 	Secrets      []ResolvedSecret
 }
@@ -298,8 +298,8 @@ func EffectiveAllow(proj Config, projectPath string) ([]string, error) {
 
 // ParseRules translates an allow list in the CLI rule grammar into SDK egress
 // allow rules.
-func ParseRules(allow []string) ([]m.PolicyRule, error) {
-	rules := make([]m.PolicyRule, 0, len(allow))
+func ParseRules(allow []string) ([]msb.PolicyRule, error) {
+	rules := make([]msb.PolicyRule, 0, len(allow))
 	for _, entry := range allow {
 		rule, err := policies.ParseAllowRule(entry)
 		if err != nil {

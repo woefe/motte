@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"slices"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/project"
 )
 
@@ -35,7 +35,7 @@ func Boot(noPull, replace bool) (int, error) {
 
 	// Reuse the installed msb/libkrunfw pair or install the SDK's pinned
 	// runtime to ~/.microsandbox.
-	if _, err := m.EnsureRuntime(ctx, m.RuntimeConfig{}, m.InstallOptions{}); err != nil {
+	if _, err := msb.EnsureRuntime(ctx, msb.RuntimeConfig{}, msb.InstallOptions{}); err != nil {
 		return 1, fmt.Errorf("ensuring the microsandbox runtime: %w", err)
 	}
 
@@ -80,12 +80,12 @@ type launchState struct {
 func openSandbox(
 	ctx context.Context,
 	name string,
-	opts []m.SandboxOption,
+	opts []msb.SandboxOption,
 	replace bool,
 	state launchState,
-) (*m.Sandbox, error) {
+) (*msb.Sandbox, error) {
 	if replace {
-		sandbox, err := createSandbox(ctx, name, append(append([]m.SandboxOption{}, opts...), m.WithReplace()))
+		sandbox, err := createSandbox(ctx, name, append(append([]msb.SandboxOption{}, opts...), msb.WithReplace()))
 		if err != nil {
 			return nil, err
 		}
@@ -96,14 +96,14 @@ func openSandbox(
 		}
 		return sandbox, nil
 	}
-	handle, err := m.GetSandbox(ctx, name)
+	handle, err := msb.GetSandbox(ctx, name)
 	if err == nil {
 		if err := convergeOnReuse(ctx, name, handle, state); err != nil {
 			return nil, err
 		}
 		return handle.ConnectOrStart(ctx)
 	}
-	if !m.IsKind(err, m.ErrSandboxNotFound) {
+	if !msb.IsKind(err, msb.ErrSandboxNotFound) {
 		return nil, fmt.Errorf("looking up sandbox %s: %w", name, err)
 	}
 	sandbox, createErr := createSandbox(ctx, name, opts)
@@ -115,9 +115,9 @@ func openSandbox(
 		}
 		return sandbox, nil
 	}
-	if m.IsKind(createErr, m.ErrSandboxAlreadyExists) {
+	if msb.IsKind(createErr, msb.ErrSandboxAlreadyExists) {
 		// A concurrent launch created it first; converge on that VM.
-		handle, handleErr := m.GetSandbox(ctx, name)
+		handle, handleErr := msb.GetSandbox(ctx, name)
 		if handleErr != nil {
 			return nil, createErr
 		}
@@ -131,17 +131,17 @@ func openSandbox(
 
 // secretModder is the modify subset shared by Sandbox and SandboxHandle.
 type secretModder interface {
-	Modify(ctx context.Context, opts m.ModifyOptions) (*m.SandboxModificationPlan, error)
+	Modify(ctx context.Context, opts msb.ModifyOptions) (*msb.SandboxModificationPlan, error)
 }
 
 // convergeAfterCreate applies secrets to a freshly created sandbox. The VM
 // booted without them, so the restart policy reboots it with the secrets in
 // place. The stored config of a fresh sandbox carries no secrets yet.
-func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, desired []project.ResolvedSecret) error {
+func convergeAfterCreate(ctx context.Context, sandbox *msb.Sandbox, desired []project.ResolvedSecret) error {
 	if len(desired) == 0 {
 		return nil
 	}
-	plan, err := modifySecrets(ctx, sandbox, sandbox.Name(), nil, desired, m.ModificationPolicyRestart)
+	plan, err := modifySecrets(ctx, sandbox, sandbox.Name(), nil, desired, msb.ModificationPolicyRestart)
 	if err != nil {
 		return err
 	}
@@ -152,14 +152,14 @@ func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, desired []proj
 // convergeOnReuse diffs the stored sandbox config against the desired secrets
 // and fixes drift: a stopped VM gets the persisted patch applied for its next
 // start; a running VM gets a note instead (its restart is left to the user).
-func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, state launchState) error {
+func convergeOnReuse(ctx context.Context, name string, handle *msb.SandboxHandle, state launchState) error {
 	stored, err := parseStoredSecrets(handle.ConfigJSON())
 	if err != nil {
 		return fmt.Errorf("sandbox %s: %w", name, err)
 	}
 	reportPolicyDrift(handle, state.policyFingerprint)
-	if handle.Status() == m.SandboxStatusRunning {
-		plan, err := modifySecrets(ctx, handle, name, stored, state.secrets, m.ModificationPolicyNextStart)
+	if handle.Status() == msb.SandboxStatusRunning {
+		plan, err := modifySecrets(ctx, handle, name, stored, state.secrets, msb.ModificationPolicyNextStart)
 		if err != nil {
 			return err
 		}
@@ -168,7 +168,7 @@ func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, 
 		}
 		return nil
 	}
-	if _, err := modifySecrets(ctx, handle, name, stored, state.secrets, m.ModificationPolicyNextStart); err != nil {
+	if _, err := modifySecrets(ctx, handle, name, stored, state.secrets, msb.ModificationPolicyNextStart); err != nil {
 		return err
 	}
 	return nil
@@ -176,7 +176,7 @@ func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, 
 
 // reportPolicyDrift tells the user that a reused VM runs an image or network
 // policy that is no longer the current one.
-func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
+func reportPolicyDrift(handle *msb.SandboxHandle, fingerprint string) {
 	config, err := handle.Config()
 	if err != nil || config.Labels == nil {
 		return
@@ -193,8 +193,8 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 // modifySecrets builds and applies the convergence patch from the drift
 // between stored and desired secrets; it is a no-op without drift.
 func modifySecrets(ctx context.Context, modder secretModder, name string, stored []storedSecret,
-	desired []project.ResolvedSecret, policy m.ModificationPolicy,
-) (*m.SandboxModificationPlan, error) {
+	desired []project.ResolvedSecret, policy msb.ModificationPolicy,
+) (*msb.SandboxModificationPlan, error) {
 	upsert, remove, migrated := secretDrift(stored, desired)
 	if len(upsert) == 0 && len(remove) == 0 {
 		return nil, nil
@@ -202,7 +202,7 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 	for _, envVar := range migrated {
 		slog.Info("migrating the stored plaintext secret to a keychain-backed env reference", "secret", envVar)
 	}
-	plan, err := modder.Modify(ctx, m.ModifyOptions{
+	plan, err := modder.Modify(ctx, msb.ModifyOptions{
 		Secrets:       secretModifySpecs(upsert),
 		SecretsRemove: remove,
 		Policy:        policy,
@@ -214,7 +214,7 @@ func modifySecrets(ctx context.Context, modder secretModder, name string, stored
 }
 
 // reportModifications logs a one-line summary of an applied plan.
-func reportModifications(plan *m.SandboxModificationPlan, name string) {
+func reportModifications(plan *msb.SandboxModificationPlan, name string) {
 	if plan == nil || len(plan.Changes) == 0 {
 		return
 	}
@@ -222,9 +222,9 @@ func reportModifications(plan *m.SandboxModificationPlan, name string) {
 }
 
 // createSandbox boots a new sandbox, logging creation progress.
-func createSandbox(ctx context.Context, name string, opts []m.SandboxOption) (*m.Sandbox, error) {
+func createSandbox(ctx context.Context, name string, opts []msb.SandboxOption) (*msb.Sandbox, error) {
 	slog.Info("creating sandbox", "name", name)
-	progress, results := m.CreateSandboxWithProgress(ctx, name, opts...)
+	progress, results := msb.CreateSandboxWithProgress(ctx, name, opts...)
 	logDone := logCreationProgress(progress)
 	result := <-results
 	<-logDone
@@ -236,7 +236,7 @@ func createSandbox(ctx context.Context, name string, opts []m.SandboxOption) (*m
 
 // logCreationProgress logs the image pulling and VM creation.
 // Returns a channel closed when the event stream is drained.
-func logCreationProgress(events <-chan m.CreationProgress) <-chan struct{} {
+func logCreationProgress(events <-chan msb.CreationProgress) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
