@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/testutil"
 )
 
@@ -66,26 +66,30 @@ func TestTemplateAndReadGroup(t *testing.T) {
 // TestParseAllowRule covers the CLI rule grammar: the semantic dns target,
 // groups, wildcards, IPs and CIDRs, protocols, ports, and the error hints.
 func TestParseAllowRule(t *testing.T) {
-	allowEgress := func(destination string) *m.PolicyRule {
-		return &m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: destination}
+	allowEgress := func(destination string) *msb.PolicyRule {
+		return &msb.PolicyRule{
+			Action:      msb.PolicyActionAllow,
+			Direction:   msb.PolicyDirectionEgress,
+			Destination: destination,
+		}
 	}
-	allowTCP := func(destination string, ports ...string) *m.PolicyRule {
+	allowTCP := func(destination string, ports ...string) *msb.PolicyRule {
 		rule := allowEgress(destination)
-		rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolTCP}
+		rule.Protocols = []msb.PolicyProtocol{msb.PolicyProtocolTCP}
 		rule.Ports = ports
 		return rule
 	}
 	tests := []struct {
 		entry  string
-		want   *m.PolicyRule
+		want   *msb.PolicyRule
 		wantRe string // expected error substring
 	}{
 		{entry: "dns", want: &testutil.DNSRule},
 		{entry: "dns:any", want: &testutil.DNSRule},
 		{entry: "dns:any:53", want: &testutil.DNSRule},
-		{entry: "dns:tcp", want: &m.PolicyRule{
-			Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress,
-			Destination: "host", Protocols: []m.PolicyProtocol{m.PolicyProtocolTCP}, Port: "53",
+		{entry: "dns:tcp", want: &msb.PolicyRule{
+			Action: msb.PolicyActionAllow, Direction: msb.PolicyDirectionEgress,
+			Destination: "host", Protocols: []msb.PolicyProtocol{msb.PolicyProtocolTCP}, Port: "53",
 		}},
 		{entry: "dns:udp:5353", wantRe: "fixed to port 53"},
 		{entry: "dns:sctp", wantRe: "supports"},

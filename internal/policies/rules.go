@@ -10,13 +10,13 @@ import (
 	"strconv"
 	"strings"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 )
 
 // ParseAllowRule translates one network.allow entry into an egress allow
 // rule.
-func ParseAllowRule(entry string) (m.PolicyRule, error) {
-	rule := m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress}
+func ParseAllowRule(entry string) (msb.PolicyRule, error) {
+	rule := msb.PolicyRule{Action: msb.PolicyActionAllow, Direction: msb.PolicyDirectionEgress}
 	if entry == "dns" || strings.HasPrefix(entry, "dns:") {
 		return parseDNSRule(entry)
 	}
@@ -82,8 +82,8 @@ func ParseAllowRule(entry string) (m.PolicyRule, error) {
 
 // parseDNSRule expands the semantic dns target into the gateway TCP/UDP
 // port-53 rule, fixed to egress like the CLI.
-func parseDNSRule(entry string) (m.PolicyRule, error) {
-	rule := m.PolicyRule{Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: "host"}
+func parseDNSRule(entry string) (msb.PolicyRule, error) {
+	rule := msb.PolicyRule{Action: msb.PolicyActionAllow, Direction: msb.PolicyDirectionEgress, Destination: "host"}
 	fields := strings.Split(entry, ":")
 	if len(fields) > 3 {
 		return rule, trailingJunkError(entry)
@@ -92,11 +92,11 @@ func parseDNSRule(entry string) (m.PolicyRule, error) {
 	case 2, 3:
 		switch fields[1] {
 		case "", "any":
-			rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolUDP, m.PolicyProtocolTCP}
+			rule.Protocols = []msb.PolicyProtocol{msb.PolicyProtocolUDP, msb.PolicyProtocolTCP}
 		case "udp":
-			rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolUDP}
+			rule.Protocols = []msb.PolicyProtocol{msb.PolicyProtocolUDP}
 		case "tcp":
-			rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolTCP}
+			rule.Protocols = []msb.PolicyProtocol{msb.PolicyProtocolTCP}
 		default:
 			return rule, fmt.Errorf(
 				"network rule %q: the `dns` target supports `tcp`, `udp`, or `any`, not %q",
@@ -115,7 +115,7 @@ func parseDNSRule(entry string) (m.PolicyRule, error) {
 			}
 		}
 	case 1:
-		rule.Protocols = []m.PolicyProtocol{m.PolicyProtocolUDP, m.PolicyProtocolTCP}
+		rule.Protocols = []msb.PolicyProtocol{msb.PolicyProtocolUDP, msb.PolicyProtocolTCP}
 	}
 	rule.Port = "53"
 	return rule, nil
@@ -178,19 +178,19 @@ func parseRuleTarget(raw string) (string, error) {
 
 // parseRuleProtocols resolves the protocol field; an empty set matches any
 // protocol.
-func parseRuleProtocols(proto string, present bool) ([]m.PolicyProtocol, error) {
+func parseRuleProtocols(proto string, present bool) ([]msb.PolicyProtocol, error) {
 	if !present || proto == "any" {
 		return nil, nil
 	}
 	switch proto {
 	case "tcp":
-		return []m.PolicyProtocol{m.PolicyProtocolTCP}, nil
+		return []msb.PolicyProtocol{msb.PolicyProtocolTCP}, nil
 	case "udp":
-		return []m.PolicyProtocol{m.PolicyProtocolUDP}, nil
+		return []msb.PolicyProtocol{msb.PolicyProtocolUDP}, nil
 	case "icmpv4":
-		return []m.PolicyProtocol{m.PolicyProtocolICMPv4}, nil
+		return []msb.PolicyProtocol{msb.PolicyProtocolICMPv4}, nil
 	case "icmpv6":
-		return []m.PolicyProtocol{m.PolicyProtocolICMPv6}, nil
+		return []msb.PolicyProtocol{msb.PolicyProtocolICMPv6}, nil
 	default:
 		return nil, fmt.Errorf(
 			"%q is not a recognized protocol; expected `any`, `tcp`, `udp`, `icmpv4`, or `icmpv6`",

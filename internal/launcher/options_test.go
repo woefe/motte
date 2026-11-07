@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	m "github.com/superradcompany/microsandbox/sdk/go"
+	msb "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/testutil"
 )
 
 // assertFindRule finds a rule by destination and, when ports is non-empty, by
 // that port, then compares it field by field.
-func assertFindRule(t *testing.T, rules []m.PolicyRule, want m.PolicyRule, ports string) {
+func assertFindRule(t *testing.T, rules []msb.PolicyRule, want msb.PolicyRule, ports string) {
 	t.Helper()
 	for _, got := range rules {
 		if got.Destination != want.Destination {
@@ -28,8 +28,8 @@ func assertFindRule(t *testing.T, rules []m.PolicyRule, want m.PolicyRule, ports
 }
 
 // applyOptions folds sandbox options into a config, for assertions.
-func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
-	config := m.SandboxConfig{}
+func applyOptions(opts []msb.SandboxOption) msb.SandboxConfig {
+	config := msb.SandboxConfig{}
 	for _, opt := range opts {
 		opt(&config)
 	}
@@ -42,15 +42,15 @@ func TestNetworkConfig(t *testing.T) {
 		t.Fatalf("ParseRules: %v", err)
 	}
 	config := networkConfig(rules)
-	if config.DefaultEgress != m.PolicyActionDeny || config.DefaultIngress != m.PolicyActionAllow {
+	if config.DefaultEgress != msb.PolicyActionDeny || config.DefaultIngress != msb.PolicyActionAllow {
 		t.Errorf("defaults = %v/%v, want deny/allow", config.DefaultEgress, config.DefaultIngress)
 	}
 	if len(config.Rules) != 2 {
 		t.Fatalf("rules = %+v, want 2", config.Rules)
 	}
 	testutil.AssertRule(t, config.Rules[0], testutil.DNSRule)
-	testutil.AssertRule(t, config.Rules[1], m.PolicyRule{
-		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
+	testutil.AssertRule(t, config.Rules[1], msb.PolicyRule{
+		Action: msb.PolicyActionAllow, Direction: msb.PolicyDirectionEgress, Destination: ".github.com",
 	})
 	if config.TLS == nil {
 		t.Error("TLS not set")
@@ -94,7 +94,7 @@ func TestSandboxOptions(t *testing.T) {
 	if config.Replace {
 		t.Error("Replace should be left unset by sandboxOptions")
 	}
-	if config.PullPolicy != m.PullPolicyAlways {
+	if config.PullPolicy != msb.PullPolicyAlways {
 		t.Errorf("PullPolicy = %q, want always", config.PullPolicy)
 	}
 	if got, ok := config.Scripts["check"]; !ok || !strings.Contains(got, "opencode --version") {
@@ -105,7 +105,7 @@ func TestSandboxOptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
 	}
-	if mount.Kind() != m.MountKindBind || mount.Bind != "/host/workspace" {
+	if mount.Kind() != msb.MountKindBind || mount.Bind != "/host/workspace" {
 		t.Errorf("mount = %+v (bind %q), want a bind of /host/workspace", mount, mount.Bind)
 	}
 	if mount.Readonly {
@@ -116,12 +116,12 @@ func TestSandboxOptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("Volumes = %+v, want an /etc/opencode mount", config.Volumes)
 	}
-	if opencode.Kind() != m.MountKindBind || opencode.Bind != "/host/opencode" || !opencode.Readonly {
+	if opencode.Kind() != msb.MountKindBind || opencode.Bind != "/host/opencode" || !opencode.Readonly {
 		t.Errorf("opencode mount = %+v (bind %q), want a readonly bind of /host/opencode",
 			opencode, opencode.Bind)
 	}
 
-	if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
+	if config.Network == nil || config.Network.DefaultEgress != msb.PolicyActionDeny {
 		t.Fatalf("Network = %+v", config.Network)
 	}
 	// One rule per allow entry, in declared order.
@@ -129,11 +129,11 @@ func TestSandboxOptions(t *testing.T) {
 		t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(allow))
 	}
 	assertFindRule(t, config.Network.Rules, testutil.DNSRule, "53")
-	assertFindRule(t, config.Network.Rules, m.PolicyRule{
-		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
+	assertFindRule(t, config.Network.Rules, msb.PolicyRule{
+		Action: msb.PolicyActionAllow, Direction: msb.PolicyDirectionEgress, Destination: ".github.com",
 	}, "")
-	assertFindRule(t, config.Network.Rules, m.PolicyRule{
-		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".opencode.ai",
+	assertFindRule(t, config.Network.Rules, msb.PolicyRule{
+		Action: msb.PolicyActionAllow, Direction: msb.PolicyDirectionEgress, Destination: ".opencode.ai",
 	}, "")
 	if config.Network.TLS == nil {
 		t.Error("Network.TLS not enabled")
@@ -154,7 +154,7 @@ func TestSandboxOptions(t *testing.T) {
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
 	opts := sandboxOptions(project.Resolved{Image: testutil.BuiltinImages()["golang"]}, true)
-	if got := applyOptions(opts).PullPolicy; got != m.PullPolicyDefault {
+	if got := applyOptions(opts).PullPolicy; got != msb.PullPolicyDefault {
 		t.Errorf("PullPolicy = %q, want the default (pull if missing)", got)
 	}
 }
