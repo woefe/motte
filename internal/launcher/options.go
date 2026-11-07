@@ -39,6 +39,9 @@ func sandboxOptions(p *profile.Profile, noPull bool) ([]m.SandboxOption, error) 
 	if p.Shell != "" {
 		opts = append(opts, m.WithShell(p.Shell))
 	}
+	if p.User != "" {
+		opts = append(opts, m.WithUser(p.User))
+	}
 	if len(p.Mounts) > 0 {
 		mounts := make(map[string]m.MountConfig, len(p.Mounts))
 		for _, mount := range p.Mounts {

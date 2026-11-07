@@ -129,6 +129,9 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	if config.Workdir != "/workspace" || config.Shell != "/bin/bash" {
 		t.Errorf("Workdir/Shell = %q/%q", config.Workdir, config.Shell)
 	}
+	if config.User != "motte" {
+		t.Errorf("User = %q, want %q", config.User, "motte")
+	}
 	if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
 		t.Errorf("Cmd = %v", config.Cmd)
 	}

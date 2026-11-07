@@ -26,6 +26,7 @@ type Profile struct {
 	MemoryMiB uint32
 	Workdir   string
 	Shell     string
+	User      string
 	Mounts    []MountSpec
 	Cmd       []string
 	Scripts   map[string]string
@@ -149,6 +150,7 @@ func base() *Profile {
 		MemoryMiB: 4096, // 4G
 		Workdir:   "/workspace",
 		Shell:     "/bin/bash",
+		User:      "motte",
 		// The directory motte was started in, resolved at launch.
 		Mounts: []MountSpec{{HostPath: "./", GuestPath: "/workspace"}},
 		Cmd:    []string{"opencode"},
