@@ -9,7 +9,6 @@ import (
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
-	"github.com/woefe/motte/internal/policies"
 	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/secrets"
 	"github.com/woefe/motte/internal/testutil"
@@ -40,8 +39,8 @@ func TestSandboxName(t *testing.T) {
 	}
 }
 
-// TestEffectiveAllowExtendsAndDedups appends selected policy groups and
-// project allow entries after the always-on base policy, deduplicating.
+// TestEffectiveAllowExtendsAndDedups merges selected policy groups and
+// project allow entries in order, deduplicating.
 func TestEffectiveAllowExtendsAndDedups(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	testutil.WriteConfigFile(t, "policies/corp.yaml", "allow:\n  - \"*.github.com\"\n  - \"corp.example.com\"\n")
@@ -56,14 +55,11 @@ func TestEffectiveAllowExtendsAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EffectiveAllow: %v", err)
 	}
-	if got := allow[len(allow)-3:]; got[0] != "corp.example.com" ||
-		got[1] != "vpn.example.com" || got[2] != "project.example.com" {
-		t.Errorf("last entries = %v, want corp, vpn, and project entries", got)
+	want := []string{"*.github.com", "corp.example.com", "vpn.example.com", "project.example.com"}
+	if !slices.Equal(allow, want) {
+		t.Errorf("allow = %v, want %v", allow, want)
 	}
 	testutil.AssertAllowUnique(t, allow)
-	if len(allow) != len(policies.BaseAllow())+3 {
-		t.Errorf("allow len = %d, want %d", len(allow), len(policies.BaseAllow())+3)
-	}
 }
 
 // TestEffectiveAllowMissingGroupFailsWithProjectPath fails when a selected

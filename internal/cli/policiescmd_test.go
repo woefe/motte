@@ -88,10 +88,12 @@ func TestPoliciesLsListsGroupsAndEffectivePolicy(t *testing.T) {
 	if !strings.Contains(stdout, "group empty-group:\n  (no entries)\n\ngroup work-vpn:\n  *.corp.example.com\n") {
 		t.Errorf("stdout = %q, want group listings", stdout)
 	}
-	wantEffectiveHeader := fmt.Sprintf("effective policy (project %s):\n", hash)
-	if !strings.Contains(stdout, wantEffectiveHeader) ||
-		!strings.Contains(stdout, "  *.corp.example.com\n  *.internal.example.com\n") {
-		t.Errorf("stdout = %q, want effective policy section", stdout)
+	wantEffective := fmt.Sprintf(
+		"effective policy (project %s):\n  *.corp.example.com\n  *.internal.example.com\n",
+		hash,
+	)
+	if !strings.Contains(stdout, wantEffective) {
+		t.Errorf("stdout = %q, want effective policy section %q", stdout, wantEffective)
 	}
 	if stderr != "" {
 		t.Errorf("stderr = %q, want none", stderr)

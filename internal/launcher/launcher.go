@@ -1,9 +1,9 @@
 // The launcher: motte's boot flow. It reads this directory's project config,
-// merges the always-on base policy, the selected policy groups, and the
-// project's extra allow entries into one allow list, mounts the user's
-// OpenCode config, resolves the keychain secrets, creates or reuses this
-// directory's sandbox via the microsandbox Go SDK, converges the sandbox's
-// secrets onto the desired set, and attaches the terminal to the workload.
+// merges the selected policy groups and the project's allow entries into one
+// allow list, mounts the user's OpenCode config, resolves the keychain secrets,
+// creates or reuses this directory's sandbox via the microsandbox Go SDK,
+// converges the sandbox's secrets onto the desired set, and attaches the
+// terminal to the workload.
 package launcher
 
 import (
@@ -101,11 +101,10 @@ func loadProject() (project.Config, string, error) {
 }
 
 // EffectiveAllow computes the deduplicated egress allow list for a project
-// config: the always-on base policy plus every selected policy group plus the
-// project's network.allow entries. A selected group without a file fails with
-// projectPath in the error.
+// config: every selected policy group plus the project's network.allow entries.
+// A selected group without a file fails with projectPath in the error.
 func EffectiveAllow(proj project.Config, projectPath string) ([]string, error) {
-	allow := policies.BaseAllow()
+	var allow []string
 	for _, group := range proj.AllowGroups {
 		entries, err := policies.ReadGroup(group)
 		if errors.Is(err, policies.ErrGroupNotFound) {

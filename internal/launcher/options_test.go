@@ -75,7 +75,7 @@ func TestNetworkConfig(t *testing.T) {
 func TestSandboxOptions(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	image := testutil.BuiltinImages()["base"]
-	allow := policies.BaseAllow()
+	allow := []string{"dns", "*.github.com", "*.opencode.ai"}
 	opts, err := sandboxOptions(image, allow, false)
 	if err != nil {
 		t.Fatalf("sandboxOptions: %v", err)
@@ -168,7 +168,7 @@ func TestSandboxOptions(t *testing.T) {
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	opts, err := sandboxOptions(testutil.BuiltinImages()["golang"], policies.BaseAllow(), true)
+	opts, err := sandboxOptions(testutil.BuiltinImages()["golang"], nil, true)
 	if err != nil {
 		t.Fatalf("sandboxOptions: %v", err)
 	}
