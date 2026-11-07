@@ -1,21 +1,25 @@
-// User configuration files: where a scope's file lives under motte's config
-// tree, and how motte creates, writes, and edits it.
+// User configuration files: where motte's config tree lives under
+// $XDG_CONFIG_HOME/motte, the directory hash that keys a project, and how
+// motte creates, writes, and edits config files.
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// ErrInvalidAfterEdit reports a scope file that fails to parse after the
+// ErrInvalidAfterEdit reports a config file that fails to parse after the
 // editor exited. The caller exits non-zero without printing another line:
 // the configure flow already explained the failure.
-var ErrInvalidAfterEdit = errors.New("the scope file is invalid after editing")
+var ErrInvalidAfterEdit = errors.New("the config file is invalid after editing")
 
 // ConfigDir returns the root of motte's per-user config tree.
 func ConfigDir() (string, error) {
@@ -26,15 +30,44 @@ func ConfigDir() (string, error) {
 	return filepath.Join(dir, "motte"), nil
 }
 
-// PoliciesDir returns the root of the per-user policy tree.
+// ProjectsDir returns the root of the per-directory project config tree.
+func ProjectsDir() (string, error) { return motteSubdir("projects") }
+
+// PoliciesDir returns the root of the per-user policy group tree.
 func PoliciesDir() (string, error) { return motteSubdir("policies") }
 
-// SecretsDir returns the root of the per-user secrets config tree.
+// SecretsDir returns the root of the per-user secret settings tree.
 func SecretsDir() (string, error) { return motteSubdir("secrets") }
 
 // OpencodeDir returns the directory mounted read-only as the guest's
 // /etc/opencode.
 func OpencodeDir() (string, error) { return motteSubdir("opencode") }
+
+// ProjectPath returns the resolved current working directory, the directory
+// the project config and sandbox belong to. Symlinks are resolved so linked or
+// renamed paths share a project.
+func ProjectPath() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolving the working directory: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolving symlinks in %s: %w", cwd, err)
+	}
+	return resolved, nil
+}
+
+// DirHash returns a 12-hex hash of the resolved current working directory, so
+// every directory maps to one stable project config and sandbox name.
+func DirHash() (string, error) {
+	resolved, err := ProjectPath()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(resolved))
+	return hex.EncodeToString(sum[:6]), nil
+}
 
 // defaultOpencodeConfig is the opencode.json written when none exists yet.
 const defaultOpencodeConfig = `{
@@ -80,9 +113,9 @@ func Hint() string {
 	return dir
 }
 
-// WriteNewFile creates a config file with a rendered skeleton, making the
-// parent directory first. The file mode is 0600 regardless of the umask:
-// the chmod call, unlike the create mode, bypasses it.
+// WriteNewFile creates or replaces a config file, making the parent directory
+// first. The file mode is 0600 regardless of the umask: the chmod call, unlike
+// the create mode, bypasses it.
 func WriteNewFile(path, contents string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
@@ -96,10 +129,66 @@ func WriteNewFile(path, contents string) error {
 	return nil
 }
 
-// ScopeFile is one scope's config file as the configure flow needs it: where
-// it lives, the command to re-run when an edit breaks it, how to render its
+// WriteAtomic writes data to path atomically with 0600 permissions, creating
+// parent directories as needed.
+func WriteAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return fmt.Errorf("setting the mode of %s: %w", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// ListYAMLNames returns the sorted stems of all `.yaml` files in dir. A
+// missing directory returns nil without error.
+func ListYAMLNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(entry.Name(), ".yaml"))
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// EditableFile is one config file as the configure flow needs it: where it
+// lives, the command to re-run when an edit breaks it, how to render its
 // skeleton, and how to read it back.
-type ScopeFile struct {
+type EditableFile struct {
 	Path     string
 	FixCmd   string
 	ErrOut   io.Writer
@@ -107,10 +196,10 @@ type ScopeFile struct {
 	Read     func() error
 }
 
-// ConfigureScope opens a scope's config file in the editor, creating it from
-// its template when missing, and re-reads it afterwards. A file that fails
-// to parse after editing keeps its content and exits non-zero.
-func ConfigureScope(f ScopeFile) error {
+// ConfigureFile opens a config file in the editor, creating it from its
+// template when missing, and re-reads it afterwards. A file that fails to
+// parse after editing keeps its content and exits non-zero.
+func ConfigureFile(f EditableFile) error {
 	errOut := f.ErrOut
 	if errOut == nil {
 		errOut = os.Stderr

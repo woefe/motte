@@ -10,157 +10,113 @@ import (
 	m "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/policies"
+	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/secrets"
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// TestPolicyAllowExtendsAndDedups appends the user entries after the
-// built-in list, deduplicating across the scopes and with the built-ins.
-func TestPolicyAllowExtendsAndDedups(t *testing.T) {
+// TestLoadProjectMissingHintsInit checks that booting without a project config
+// fails with a hint to run `motte init`.
+func TestLoadProjectMissingHintsInit(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
+	_, _, err := loadProject()
+	if err == nil || !strings.Contains(err.Error(), "motte init") {
+		t.Fatalf("loadProject(missing) = %v, want `motte init` hint", err)
+	}
+}
+
+// TestSandboxName checks that the sandbox name is `motte-<dir-hash>`.
+func TestSandboxName(t *testing.T) {
 	hash, err := config.DirHash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	testutil.WriteConfigFile(t, "policies/global.yaml", testutil.Fixture(t, "policies/extends/global.yaml"))
-	testutil.WriteConfigFile(t, "policies/golang.yaml", testutil.Fixture(t, "policies/extends/golang.yaml"))
-	testutil.WriteConfigFile(t, "policies/"+hash+".yaml", testutil.Fixture(t, "policies/extends/project.yaml"))
-	p, err := loadProfile("golang")
+	name, err := sandboxName()
 	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
+		t.Fatal(err)
 	}
-	allow := p.Network.Allow
-	// Built-ins stay first; the user entries append last, global before
-	// profile before project.
-	if got := allow[len(allow)-3:]; got[0] != "extra.example.com" ||
-		got[1] != "one.more.example.com" || got[2] != "project.example.com" {
-		t.Errorf("last entries = %v, want the global, profile, and project entries", got)
+	if name != "motte-"+hash {
+		t.Errorf("sandboxName() = %q, want %q", name, "motte-"+hash)
 	}
-	// Cross-scope and built-in duplicates are dropped: the list stays unique.
+}
+
+// TestEffectiveAllowExtendsAndDedups appends selected policy groups and
+// project allow entries after the always-on base policy, deduplicating.
+func TestEffectiveAllowExtendsAndDedups(t *testing.T) {
+	testutil.IsolatedConfigDir(t)
+	testutil.WriteConfigFile(t, "policies/corp.yaml", "allow:\n  - \"*.github.com\"\n  - \"corp.example.com\"\n")
+	testutil.WriteConfigFile(t, "policies/vpn.yaml", "allow:\n  - \"corp.example.com\"\n  - \"vpn.example.com\"\n")
+
+	proj := project.Config{
+		Image:       "ghcr.io/woefe/motte/golang:latest",
+		AllowGroups: []string{"corp", "vpn"},
+		Allow:       []string{"vpn.example.com", "project.example.com"},
+	}
+	allow, err := EffectiveAllow(proj, "/tmp/project.yaml")
+	if err != nil {
+		t.Fatalf("EffectiveAllow: %v", err)
+	}
+	if got := allow[len(allow)-3:]; got[0] != "corp.example.com" ||
+		got[1] != "vpn.example.com" || got[2] != "project.example.com" {
+		t.Errorf("last entries = %v, want corp, vpn, and project entries", got)
+	}
 	testutil.AssertAllowUnique(t, allow)
-	// 15 base + 5 golang extras + 3 unique user entries.
-	if len(allow) != 23 {
-		t.Errorf("allow len = %d, want 23", len(allow))
+	if len(allow) != len(policies.BaseAllow())+3 {
+		t.Errorf("allow len = %d, want %d", len(allow), len(policies.BaseAllow())+3)
 	}
 }
 
-// TestPolicyAllowAbsentAndEmptyNoOps: no policy files, an empty file, and
-// an explicitly empty allow list do not change the built-in policy — in
-// particular an empty list must not resolve to the public profile.
-func TestPolicyAllowAbsentAndEmptyNoOps(t *testing.T) {
+// TestEffectiveAllowMissingGroupFailsWithProjectPath fails when a selected
+// group has no file, naming the project file path in the error.
+func TestEffectiveAllowMissingGroupFailsWithProjectPath(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "policies/web.yaml", "")
-	p, err := loadProfile("web")
+	projectPath, err := project.CurrentPath()
 	if err != nil {
-		t.Fatalf("loadProfile with an empty file: %v", err)
+		t.Fatal(err)
 	}
-	if len(p.Network.Allow) != 16 {
-		t.Errorf("allow len = %d, want the unchanged 16", len(p.Network.Allow))
+	proj := project.Config{
+		Image:       "ghcr.io/woefe/motte/base:latest",
+		AllowGroups: []string{"missing-group"},
 	}
-
-	testutil.WriteConfigFile(t, "policies/web.yaml", `network:
-  allow: []
-`)
-	p, err = loadProfile("web")
-	if err != nil {
-		t.Fatalf("loadProfile with an empty allow list: %v", err)
-	}
-	if len(p.Network.Allow) != 16 {
-		t.Errorf("allow len = %d, want the unchanged 16", len(p.Network.Allow))
-	}
-	opts, err := sandboxOptions(p, false)
-	if err != nil {
-		t.Fatalf("sandboxOptions: %v", err)
-	}
-	config := applyOptions(opts)
-	if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
-		t.Errorf("Network = %+v, want deny-by-default, not the public profile", config.Network)
+	_, err = EffectiveAllow(proj, projectPath)
+	if err == nil || !strings.Contains(err.Error(), projectPath) || !strings.Contains(err.Error(), "missing-group") {
+		t.Fatalf("EffectiveAllow(missing group) = %v, want project path %q and group name", err, projectPath)
 	}
 }
 
-// TestPolicyRejectsUnknownFields fails the launch on a schema typo.
-func TestPolicyRejectsUnknownFields(t *testing.T) {
+// TestPolicyGroupValidationErrors covers invalid YAML or rule entries in a
+// selected policy group file.
+func TestPolicyGroupValidationErrors(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "policies/web.yaml", `network:
-  alow:
-    - "extra.example.com"
-`)
-	_, err := loadProfile("web")
-	if err == nil || !strings.Contains(err.Error(), "invalid policy") || !strings.Contains(err.Error(), "alow") {
-		t.Fatalf("error = %v, want an unknown-field error naming the file and `alow`", err)
+	testutil.WriteConfigFile(t, "policies/bad.yaml", "alow:\n  - \"extra.example.com\"\n")
+	proj := project.Config{
+		Image:       "ghcr.io/woefe/motte/base:latest",
+		AllowGroups: []string{"bad"},
+	}
+	if _, err := EffectiveAllow(proj, "/tmp/project.yaml"); err == nil || !strings.Contains(err.Error(), "alow") {
+		t.Fatalf("error = %v, want unknown-field error naming `alow`", err)
 	}
 
-	// The TLS toggle is not part of the policy schema either.
-	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "policies/global.yaml", `network:
-  tls:
-    enabled: false
-`)
-	_, err = loadProfile("golang")
-	if err == nil || !strings.Contains(err.Error(), "invalid policy") || !strings.Contains(err.Error(), "tls") {
-		t.Fatalf("error = %v, want an unknown-field error naming the file and `tls`", err)
+	testutil.WriteConfigFile(t, "policies/bad.yaml", "allow:\n  - \"webserver\"\n")
+	if _, err := EffectiveAllow(proj, "/tmp/project.yaml"); err == nil || !strings.Contains(err.Error(), "webserver") {
+		t.Fatalf("error = %v, want bad-rule error naming `webserver`", err)
 	}
 }
 
-// TestPolicyRejectsBadRuleEntries validates the entries with the CLI rule
-// grammar at load time, with the file named in the error.
-func TestPolicyRejectsBadRuleEntries(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "policies/golang.yaml", `network:
-  allow:
-    - "*.github.com"
-    - "webserver"
-`)
-	_, err := loadProfile("golang")
-	if err == nil || !strings.Contains(err.Error(), "policy") || !strings.Contains(err.Error(), "webserver") {
-		t.Fatalf("error = %v, want a bad-rule error naming the file and `webserver`", err)
-	}
-}
-
-// TestPolicyFingerprintChangesWithThePolicy covers the fingerprint that
-// rides in the sandbox label: it changes with the policy and stays the same
-// for an unchanged one.
-func TestPolicyFingerprintChangesWithThePolicy(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	p, err := loadProfile("golang")
-	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
-	}
-	before := policies.Fingerprint(p)
-	if before == "" {
-		t.Fatal("fingerprint is empty")
-	}
-	if again := policies.Fingerprint(p); again != before {
-		t.Errorf("fingerprint = %q, want the stable %q", again, before)
-	}
-	testutil.WriteConfigFile(t, "policies/golang.yaml", `network:
-  allow:
-    - "extra.example.com"
-`)
-	p, err = loadProfile("golang")
-	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
-	}
-	if after := policies.Fingerprint(p); after == before {
-		t.Errorf("fingerprint = %q, want a change after the policy changed", after)
-	}
-}
-
-// TestResolveSecrets: values come from the keychain into host env vars, egress
-// extends with the secrets' allow entries, and a keychain-less secret fails
-// the launch with the set hint.
+// TestResolveSecrets checks that selected secrets resolve from settings files
+// and the keychain into host env vars, do not widen egress, and fail with
+// clear hints when settings or keychain values are missing.
 func TestResolveSecrets(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "sk_test"})
-	testutil.WriteConfigFile(t, "secrets/global.yaml",
-		"secrets:\n  EXAMPLE_API_KEY:\n    allow:\n      - \"api.example.com\"\n")
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow:\n  - \"api.example.com\"\n")
 	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_EXAMPLE_API_KEY") })
 
-	p, err := loadProfile("golang")
+	allow, err := EffectiveAllow(project.Config{Image: "ghcr.io/woefe/motte/base:latest"}, "/tmp/project.yaml")
 	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
+		t.Fatalf("EffectiveAllow: %v", err)
 	}
-	resolved, err := resolveSecrets(p, store)
+	resolved, err := resolveSecrets([]string{"EXAMPLE_API_KEY"}, store)
 	if err != nil {
 		t.Fatalf("resolveSecrets: %v", err)
 	}
@@ -170,20 +126,26 @@ func TestResolveSecrets(t *testing.T) {
 	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "sk_test" {
 		t.Errorf("MOTTE_SECRET_EXAMPLE_API_KEY = %q", got)
 	}
-	// Egress auto-extends with the secrets' allow entries.
-	if !slices.Contains(p.Network.Allow, "api.example.com") {
-		t.Errorf("allow misses the secret's host: %v", p.Network.Allow)
+	// Secret allow hosts must NOT automatically widen the egress allow list.
+	if slices.Contains(allow, "api.example.com") {
+		t.Errorf("allow unexpectedly contains secret host api.example.com: %v", allow)
 	}
 	unsetSecretEnv(resolved)
 	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "" {
 		t.Errorf("env still set after unsetting: %q", got)
 	}
 
-	// Without a keychain value the launch fails with a set hint.
+	// Missing secret settings file fails with a hint to run `motte secrets add`.
+	if _, err := resolveSecrets([]string{"MISSING_SECRET"}, store); err == nil ||
+		!strings.Contains(err.Error(), "motte secrets add") {
+		t.Errorf("error = %v, want `motte secrets add` hint", err)
+	}
+
+	// Missing keychain value fails with a hint to run `motte secrets set <name>`.
 	emptyStore := testutil.NewFakeStore(secrets.ErrNotFound, nil)
-	if _, err := resolveSecrets(p, emptyStore); err == nil ||
+	if _, err := resolveSecrets([]string{"EXAMPLE_API_KEY"}, emptyStore); err == nil ||
 		!strings.Contains(err.Error(), "motte secrets set EXAMPLE_API_KEY") {
-		t.Errorf("error = %v, want the set hint", err)
+		t.Errorf("error = %v, want `motte secrets set EXAMPLE_API_KEY` hint", err)
 	}
 }
 

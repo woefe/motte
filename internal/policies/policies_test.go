@@ -1,52 +1,85 @@
 package policies
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
-	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// mustDirHash returns the hash of the current directory.
-func mustDirHash(t *testing.T) string {
-	t.Helper()
-	hash, err := config.DirHash()
-	if err != nil {
-		t.Fatal(err)
+// TestBaseAllowAndExtend checks that BaseAllow is unique and contains the core
+// rules, and that ExtendAllow deduplicates entries.
+func TestBaseAllowAndExtend(t *testing.T) {
+	base := BaseAllow()
+	testutil.AssertAllowListed(t, base, "dns", "*.github.com", "*.opencode.ai", "pypi.org")
+	testutil.AssertAllowUnique(t, base)
+	for _, entry := range base {
+		if _, err := ParseAllowRule(entry); err != nil {
+			t.Errorf("base entry %q failed ParseAllowRule: %v", entry, err)
+		}
 	}
-	return hash
+	extended := ExtendAllow(base, []string{"*.github.com", "extra.example.com"})
+	testutil.AssertAllowUnique(t, extended)
+	if len(extended) != len(base)+1 || extended[len(extended)-1] != "extra.example.com" {
+		t.Errorf("extended = %v, want extra.example.com appended once", extended)
+	}
 }
 
-// TestTemplate covers the scope-file skeletons: the entry comments, and the
-// project path only for the current directory's project scope.
-func TestTemplate(t *testing.T) {
+// TestValidateGroupName checks the slug rule for policy group names.
+func TestValidateGroupName(t *testing.T) {
+	for _, ok := range []string{"work-vpn", "golang", "corp1", "a-b-c"} {
+		if err := ValidateGroupName(ok); err != nil {
+			t.Errorf("ValidateGroupName(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "Work", "work_vpn", "-work", "work-", "work--vpn", "a/b", ".."} {
+		if err := ValidateGroupName(bad); err == nil {
+			t.Errorf("ValidateGroupName(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// TestTemplateAndReadGroup covers the policy group skeleton and strict reading.
+func TestTemplateAndReadGroup(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	global, err := Template(config.Scope{})
+	tmpl, err := Template("work-vpn")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Template: %v", err)
 	}
-	if !strings.Contains(global, "network:") || !strings.Contains(global, "rule grammar") {
-		t.Errorf("global template = %q, want the entry comments", global)
+	if !strings.Contains(tmpl, "# motte policy group — work-vpn") || !strings.Contains(tmpl, "allow:") {
+		t.Errorf("Template = %q, want header and allow:", tmpl)
 	}
-	project, err := Template(config.Scope{Hash: mustDirHash(t)})
-	if err != nil {
-		t.Fatal(err)
+	testutil.WriteConfigFile(t, "policies/work-vpn.yaml", tmpl)
+	entries, err := ReadGroup("work-vpn")
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("ReadGroup(template) = %v, %v; want empty without error", entries, err)
 	}
-	dir, err := config.ProjectPath()
-	if err != nil {
-		t.Fatalf("ProjectPath: %v", err)
+
+	testutil.WriteConfigFile(t, "policies/work-vpn.yaml", "allow:\n  - \"*.corp.example.com\"\n")
+	entries, err = ReadGroup("work-vpn")
+	if err != nil || len(entries) != 1 || entries[0] != "*.corp.example.com" {
+		t.Fatalf("ReadGroup = %v, %v", entries, err)
 	}
-	if !strings.Contains(project, "Project path: "+dir) {
-		t.Errorf("project template = %q, want the current directory's path", project)
+
+	if _, err := ReadGroup("missing"); !errors.Is(err, ErrGroupNotFound) {
+		t.Errorf("ReadGroup(missing) = %v, want ErrGroupNotFound", err)
 	}
-	foreign, err := Template(config.Scope{Hash: "1234567890ab"})
-	if err != nil {
-		t.Fatal(err)
+}
+
+// TestFingerprintIncludesImageAndPolicy checks that changing either image or
+// network policy changes the fingerprint.
+func TestFingerprintIncludesImageAndPolicy(t *testing.T) {
+	base := BaseAllow()
+	fp1 := Fingerprint("ghcr.io/woefe/motte/base:latest", base)
+	fp2 := Fingerprint("ghcr.io/woefe/motte/golang:latest", base)
+	if fp1 == fp2 {
+		t.Error("Fingerprint did not change when image changed")
 	}
-	if strings.Contains(foreign, "Project path:") {
-		t.Errorf("foreign template = %q, want no project path", foreign)
+	fp3 := Fingerprint("ghcr.io/woefe/motte/base:latest", ExtendAllow(base, []string{"extra.example.com"}))
+	if fp1 == fp3 {
+		t.Error("Fingerprint did not change when allow list changed")
 	}
 }
 

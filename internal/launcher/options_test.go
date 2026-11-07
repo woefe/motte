@@ -10,7 +10,6 @@ import (
 	m "github.com/superradcompany/microsandbox/sdk/go"
 	motteconfig "github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/policies"
-	"github.com/woefe/motte/internal/profile"
 	"github.com/woefe/motte/internal/secrets"
 	"github.com/woefe/motte/internal/testutil"
 )
@@ -42,7 +41,7 @@ func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
 }
 
 // workingDir returns the test process's resolved working directory: the base
-// the launcher resolves relative mount sources against.
+// the launcher resolves the /workspace mount source to.
 func workingDir(t *testing.T) string {
 	t.Helper()
 	wd, err := motteconfig.ProjectPath()
@@ -54,42 +53,7 @@ func workingDir(t *testing.T) string {
 
 func TestNetworkConfig(t *testing.T) {
 	allowList := []string{"dns", "*.github.com"}
-
-	// No allow list: the runtime's default policy, with TLS when enabled.
-	config, err := networkConfig(&profile.NetworkDoc{TLS: &profile.TLSDoc{Enabled: true}})
-	if err != nil {
-		t.Fatalf("networkConfig: %v", err)
-	}
-	if len(config.Rules) != 0 {
-		t.Errorf("rules = %v, want none", config.Rules)
-	}
-	if config.TLS == nil {
-		t.Error("TLS not set")
-	}
-
-	// An explicit empty allow list resolves to the default public profile.
-	config, err = networkConfig(&profile.NetworkDoc{Allow: []string{}})
-	if err != nil {
-		t.Fatalf("networkConfig: %v", err)
-	}
-	if config.DefaultEgress != m.PolicyActionDeny || config.DefaultIngress != m.PolicyActionAllow {
-		t.Errorf("defaults = %v/%v, want deny/allow", config.DefaultEgress, config.DefaultIngress)
-	}
-	foundDNS, foundPublic := false, false
-	for _, rule := range config.Rules {
-		if rule.Destination == "host" && rule.Port == "53" {
-			foundDNS = true
-		}
-		if rule.Destination == "public" {
-			foundPublic = true
-		}
-	}
-	if !foundDNS || !foundPublic {
-		t.Errorf("rules = %+v, want the public profile's dns + public rules", config.Rules)
-	}
-
-	// A non-empty allow list is an egress allowlist with translated rules.
-	config, err = networkConfig(&profile.NetworkDoc{Allow: allowList, TLS: &profile.TLSDoc{Enabled: true}})
+	config, err := networkConfig(allowList)
 	if err != nil {
 		t.Fatalf("networkConfig: %v", err)
 	}
@@ -108,20 +72,18 @@ func TestNetworkConfig(t *testing.T) {
 	}
 }
 
-func TestSandboxOptionsTranslateProfile(t *testing.T) {
+func TestSandboxOptions(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	p, err := loadProfile("base")
-	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
-	}
-	opts, err := sandboxOptions(p, false)
+	image := testutil.BuiltinImages()["base"]
+	allow := policies.BaseAllow()
+	opts, err := sandboxOptions(image, allow, false)
 	if err != nil {
 		t.Fatalf("sandboxOptions: %v", err)
 	}
 	config := applyOptions(opts)
 
-	if config.Image != testutil.BuiltinImages()["base"] {
-		t.Errorf("Image = %q, want %q", config.Image, testutil.BuiltinImages()["base"])
+	if config.Image != image {
+		t.Errorf("Image = %q, want %q", config.Image, image)
 	}
 	if config.CPUs != 4 || config.MemoryMiB != 4096 {
 		t.Errorf("CPUs/Memory = %d/%d", config.CPUs, config.MemoryMiB)
@@ -135,7 +97,7 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	if len(config.Cmd) != 1 || config.Cmd[0] != "opencode" {
 		t.Errorf("Cmd = %v", config.Cmd)
 	}
-	// Replace is the launcher's call (--replace), not part of the profile.
+	// Replace is the launcher's call (--replace), not set by sandboxOptions.
 	if config.Replace {
 		t.Error("Replace should be left unset by sandboxOptions")
 	}
@@ -177,11 +139,9 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 		t.Fatalf("Network = %+v", config.Network)
 	}
 	// One rule per allow entry, in declared order.
-	if len(config.Network.Rules) != len(p.Network.Allow) {
-		t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(p.Network.Allow))
+	if len(config.Network.Rules) != len(allow) {
+		t.Fatalf("Network.Rules = %d entries, want %d", len(config.Network.Rules), len(allow))
 	}
-	// Spot-check the rule kinds every profile uses: the semantic dns
-	// target and domain suffixes.
 	assertFindRule(t, config.Network.Rules, testutil.DNSRule, "53")
 	assertFindRule(t, config.Network.Rules, m.PolicyRule{
 		Action: m.PolicyActionAllow, Direction: m.PolicyDirectionEgress, Destination: ".github.com",
@@ -192,10 +152,10 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 	if config.Network.TLS == nil {
 		t.Error("Network.TLS not enabled")
 	}
-	// The fingerprint of the effective policy rides in the labels, so
-	// a reused VM can be told that its policy changed.
-	if got := config.Labels[policies.LabelKey]; got != policies.Fingerprint(p) {
-		t.Errorf("label %q = %q, want %q", policies.LabelKey, got, policies.Fingerprint(p))
+	// The fingerprint of the image and effective policy rides in the labels,
+	// so a reused VM can be told that its config changed.
+	if got := config.Labels[policies.LabelKey]; got != policies.Fingerprint(image, allow) {
+		t.Errorf("label %q = %q, want %q", policies.LabelKey, got, policies.Fingerprint(image, allow))
 	}
 
 	// Secrets are never part of create options: values would persist
@@ -208,11 +168,7 @@ func TestSandboxOptionsTranslateProfile(t *testing.T) {
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	p, err := loadProfile("golang")
-	if err != nil {
-		t.Fatalf("loadProfile: %v", err)
-	}
-	opts, err := sandboxOptions(p, true)
+	opts, err := sandboxOptions(testutil.BuiltinImages()["golang"], policies.BaseAllow(), true)
 	if err != nil {
 		t.Fatalf("sandboxOptions: %v", err)
 	}

@@ -17,16 +17,15 @@ Bind it to an interface the sandbox gateway can reach, for example `--host 0.0.0
 llama-server -m ./model.gguf --host 0.0.0.0 --port 9931
 ```
 
-Egress from the VM is deny-by-default, so allow the host port in your network policy:
+Egress from the VM is deny-by-default, so allow the host port in a policy group (or in your project's `network.allow`):
 
 ```sh
-motte policies configure global
+motte policies configure local-llm
 ```
 
 ```yaml
-network:
-  allow:
-    - "host:tcp:9931"
+allow:
+  - "host:tcp:9931"
 ```
 
 Add the provider to `opencode.json`:
@@ -39,13 +38,12 @@ Add the provider to `opencode.json`:
       "name": "Llama server (host)",
       "package": "aisdk:@opencode/ai/providers/openai-compatible",
       "settings": {
-        "baseURL": "http://host.microsandbox.internal:9931/v1",
+        "baseURL": "http://host.microsandbox.internal:9931/v1"
       }
     }
   }
 }
 ```
-
 
 ## OpenCode Go
 
@@ -81,7 +79,7 @@ Add the provider to `opencode.json` and reference the key as `{env:OPENCODE_GO_K
 }
 ```
 
-Launch the sandbox with `motte oc <profile>`.
+Initialize the project with `motte init` and launch the sandbox with `motte oc`.
 
 ## Proxies and gateways
 
@@ -92,7 +90,8 @@ Store the key as a secret named `LLM_API_KEY`, and enter the proxy's hostname as
 motte secrets add
 ```
 
-To route a OpenCode built-in provider through a proxy, override only its endpoint and key:
+Allow egress to `llm-proxy.example.com` in a policy group or your project's `network.allow`.
+To route an OpenCode built-in provider through a proxy, override only its endpoint and key:
 
 ```json
 {
@@ -108,4 +107,3 @@ To route a OpenCode built-in provider through a proxy, override only its endpoin
 ```
 
 An unset variable becomes an empty string, so a missing secret shows up as an authentication error.
-

@@ -1,114 +1,26 @@
 package secrets
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// mustDirHash returns the hash of the current directory.
-func mustDirHash(t *testing.T) string {
-	t.Helper()
-	hash, err := config.DirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return hash
-}
-
-// readSpec returns the configured settings of a secret, failing the test
-// when its scope file is invalid or the secret is missing.
-func readSpec(t *testing.T, n Name) Spec {
-	t.Helper()
-	secrets, err := ReadScope(n.Scope)
-	if err != nil {
-		t.Fatalf("ReadScope(%s): %v", n.Full, err)
-	}
-	spec, ok := secrets[n.Leaf]
-	if !ok {
-		t.Fatalf("secret %s is not configured", n.Full)
-	}
-	return spec
-}
-
-// TestParseName covers the path-like name grammar per scope.
-func TestParseName(t *testing.T) {
-	tests := []struct {
-		name      string
-		wantScope config.Scope
-		wantLeaf  string
-		wantErr   string
-	}{
-		{name: "EXAMPLE_API_KEY", wantScope: config.Scope{}, wantLeaf: "EXAMPLE_API_KEY"},
-		{name: "golang/EXAMPLE_API_KEY", wantScope: config.Scope{Profile: "golang"}, wantLeaf: "EXAMPLE_API_KEY"},
-		{name: "web/login_token", wantScope: config.Scope{Profile: "web"}, wantLeaf: "login_token"},
-		{name: "1234567890ab/FOO", wantScope: config.Scope{Hash: "1234567890ab"}, wantLeaf: "FOO"},
-		{name: "", wantErr: "empty secret name"},
-		{name: "golang//FOO", wantErr: "invalid secret name"},
-		{name: "a/b/c/d", wantErr: "at most two segments"},
-		{name: "webserver/FOO", wantErr: "not a built-in profile"},
-		{name: "FOO-BAR", wantErr: "valid env var"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := ParseName(test.name)
-			if test.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Errorf("ParseName(%q) error = %v, want containing %q", test.name, err, test.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ParseName(%q): %v", test.name, err)
-			}
-			if got.Scope != test.wantScope || got.Leaf != test.wantLeaf {
-				t.Errorf("ParseName(%q) = %+v, want scope/leaf %+v/%q",
-					test.name, got, test.wantScope, test.wantLeaf)
-			}
-		})
-	}
-}
-
-// TestSecretScopeFiles maps the scopes to their files: one file per scope,
-// holding every secret of that scope.
-func TestSecretScopeFiles(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	hash, err := config.DirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		scope config.Scope
-		arg   string
-		want  string
-	}{
-		{scope: config.Scope{}, arg: "global", want: "global.yaml"},
-		{scope: config.Scope{Profile: "golang"}, arg: "golang", want: "golang.yaml"},
-		{scope: config.Scope{Hash: hash}, arg: "project", want: hash + ".yaml"},
-	}
-	for _, test := range tests {
-		path, err := ScopePath(test.scope)
-		if err != nil {
-			t.Fatalf("ScopePath: %v", err)
+// TestValidateName checks the secret env var naming rule.
+func TestValidateName(t *testing.T) {
+	for _, ok := range []string{"EXAMPLE_API_KEY", "_TOKEN", "key_1"} {
+		if err := ValidateName(ok); err != nil {
+			t.Errorf("ValidateName(%q) = %v, want nil", ok, err)
 		}
-		if filepath.Base(path) != test.want {
-			t.Errorf("ScopePath = %q, want %q", filepath.Base(path), test.want)
-		}
-		// The commands reach the same file through their scope argument.
-		scope, err := config.ResolveScope(test.arg)
-		if err != nil {
-			t.Fatalf("ResolveScope(%q): %v", test.arg, err)
-		}
-		argPath, err := ScopePath(scope)
-		if err != nil {
-			t.Fatalf("ScopePath: %v", err)
-		}
-		if filepath.Base(argPath) != test.want {
-			t.Errorf("ScopePath from the %q scope = %q, want %q", test.arg, filepath.Base(argPath), test.want)
+	}
+	for _, bad := range []string{"", "1KEY", "golang/EXAMPLE_API_KEY", "FOO-BAR", "a b"} {
+		if err := ValidateName(bad); err == nil {
+			t.Errorf("ValidateName(%q) = nil, want an error", bad)
 		}
 	}
 }
@@ -121,223 +33,116 @@ func TestValidateAllowEntry(t *testing.T) {
 			t.Errorf("ValidateAllowEntry(%q) = %v, want nil", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "webserver", "localhost", "*.example.com:443", "*. *", "ex ample.com"} {
+	for _, bad := range []string{"", "webserver", "localhost", "*.com", "*.example.com:443", "*. *", "ex ample.com"} {
 		if err := ValidateAllowEntry(bad); err == nil {
 			t.Errorf("ValidateAllowEntry(%q) = nil, want an error", bad)
 		}
 	}
 }
 
-// TestReadWriteMeta round-trips a scope file and covers schema strictness:
-// unknown fields fail, allow is required, header fields default.
-func TestReadWriteMeta(t *testing.T) {
+// TestReadWriteAndRemoveMeta round-trips a secret settings file and covers
+// schema strictness: unknown fields fail, allow is required, header fields
+// default.
+func TestReadWriteAndRemoveMeta(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	name, err := ParseName("golang/EXAMPLE_API_KEY")
-	if err != nil {
-		t.Fatal(err)
-	}
+	const name = "EXAMPLE_API_KEY"
 	spec := Spec{Allow: []string{"*.opencode.ai"}, HeaderFields: []string{"authorization"}}
 	if err := WriteMeta(name, spec); err != nil {
 		t.Fatalf("WriteMeta: %v", err)
 	}
-	got := readSpec(t, name)
-	if got.Name != "golang/EXAMPLE_API_KEY" || got.EnvVar != "EXAMPLE_API_KEY" ||
+	got, err := Read(name)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Name != name || got.EnvVar != name ||
 		len(got.Allow) != 1 || got.Allow[0] != "*.opencode.ai" ||
 		len(got.HeaderFields) != 1 || got.HeaderFields[0] != "authorization" {
-		t.Fatalf("readSpec = %+v", got)
+		t.Fatalf("Read = %+v", got)
 	}
 
-	// The secret lives in the profile's scope file with 0600 permissions.
-	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
-	info, err := os.Stat(scopePath)
+	// The secret lives in its own file with 0600 permissions and the header
+	// comment.
+	path, err := Path(name)
 	if err != nil {
-		t.Fatalf("statting the scope file: %v", err)
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "EXAMPLE_API_KEY.yaml" {
+		t.Errorf("Path = %q, want EXAMPLE_API_KEY.yaml", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("statting the secret file: %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("scope file mode = %#o, want 0600", perm)
+		t.Errorf("secret file mode = %#o, want 0600", perm)
 	}
-	content, err := os.ReadFile(scopePath)
+	content, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading the scope file: %v", err)
+		t.Fatalf("reading the secret file: %v", err)
 	}
-	if !strings.Contains(string(content), "EXAMPLE_API_KEY:") ||
+	if !strings.Contains(string(content), "# motte secret — EXAMPLE_API_KEY") ||
 		!strings.Contains(string(content), "*.opencode.ai") {
-		t.Errorf("scope file = %q, want the secret and its hosts", string(content))
+		t.Errorf("secret file = %q, want the header comment and hosts", string(content))
+	}
+
+	// Header fields default when omitted.
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow:\n  - \"api.example.com\"\n")
+	got, err = Read(name)
+	if err != nil {
+		t.Fatalf("Read(default headers): %v", err)
+	}
+	if !slices.Equal(got.HeaderFields, DefaultHeaderFields) {
+		t.Errorf("HeaderFields = %v, want %v", got.HeaderFields, DefaultHeaderFields)
 	}
 
 	// Unknown fields fail lint-style, with the path in the error.
-	testutil.WriteConfigFile(t, "secrets/golang.yaml",
-		"secrets:\n  EXAMPLE_API_KEY:\n    allow: [\"api.example.com\"]\n    alow: [oops]\n")
-	_, err = ReadScope(name.Scope)
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml",
+		"allow: [\"api.example.com\"]\nalow: [oops]\n")
+	_, err = Read(name)
 	if err == nil || !strings.Contains(err.Error(), "invalid secret config") || !strings.Contains(err.Error(), "alow") {
 		t.Errorf("error = %v, want an unknown-field error naming alow", err)
 	}
 
 	// A missing allow list is invalid.
-	testutil.WriteConfigFile(t, "secrets/golang.yaml",
-		"secrets:\n  EXAMPLE_API_KEY:\n    header_fields: [origin]\n")
-	if _, err := ReadScope(name.Scope); err == nil || !strings.Contains(err.Error(), "empty allow list") {
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "header_fields: [origin]\n")
+	if _, err := Read(name); err == nil || !strings.Contains(err.Error(), "empty allow list") {
 		t.Errorf("error = %v, want an empty-allow error", err)
 	}
 
 	// Allow hosts must be host patterns, not network rule targets.
-	testutil.WriteConfigFile(t, "secrets/golang.yaml",
-		"secrets:\n  EXAMPLE_API_KEY:\n    allow: [\"host:tcp:9931\"]\n")
-	if _, err := ReadScope(name.Scope); err == nil ||
-		!strings.Contains(err.Error(), "invalid secret allow host") {
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow: [\"host:tcp:9931\"]\n")
+	if _, err := Read(name); err == nil || !strings.Contains(err.Error(), "invalid secret allow host") {
 		t.Errorf("error = %v, want a bad-host error", err)
 	}
-}
 
-// TestScopeFileKeepsCommentsAndSiblings covers the round-trip through the
-// scope file: the comments and the other secrets of the scope survive an add
-// and a remove.
-func TestScopeFileKeepsCommentsAndSiblings(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "secrets/golang.yaml", testutil.Fixture(t, "secrets/comments/golang.yaml"))
-	first, err := ParseName("golang/EXAMPLE_API_KEY")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := ParseName("golang/OTHER_SECRET")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteMeta(second, Spec{
-		Allow:        []string{"other.example.com"},
-		HeaderFields: []string{"authorization"},
-	}); err != nil {
-		t.Fatalf("WriteMeta: %v", err)
-	}
-	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
-	content, err := os.ReadFile(scopePath)
-	if err != nil {
-		t.Fatalf("reading the scope file: %v", err)
-	}
-	if !strings.Contains(string(content), "# the golang scope") ||
-		!strings.Contains(string(content), "# the key we use") {
-		t.Errorf("scope file = %q, want the comments kept", string(content))
-	}
-	if spec := readSpec(t, first); spec.Allow[0] != "*.opencode.ai" {
-		t.Errorf("first = %+v, want the written allow list", spec)
-	}
-	if spec := readSpec(t, second); spec.Allow[0] != "other.example.com" {
-		t.Errorf("second = %+v, want the written allow list", spec)
-	}
-
-	// Removing a secret keeps the file and its remaining secret.
-	if err := RemoveMeta(second); err != nil {
-		t.Fatalf("RemoveMeta: %v", err)
-	}
-	content, err = os.ReadFile(scopePath)
-	if err != nil {
-		t.Fatalf("reading the scope file: %v", err)
-	}
-	if strings.Contains(string(content), "OTHER_SECRET") {
-		t.Errorf("scope file = %q, want OTHER_SECRET removed", string(content))
-	}
-	if !strings.Contains(string(content), "EXAMPLE_API_KEY") {
-		t.Errorf("scope file = %q, want EXAMPLE_API_KEY kept", string(content))
-	}
-}
-
-// TestRemoveLastSecretRemovesTheScopeFile cleans up a scope file that holds
-// no secret anymore.
-func TestRemoveLastSecretRemovesTheScopeFile(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	name, err := ParseName("golang/ONLY_SECRET")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteMeta(name, Spec{
-		Allow:        []string{"only.example.com"},
-		HeaderFields: []string{"authorization"},
-	}); err != nil {
-		t.Fatalf("WriteMeta: %v", err)
-	}
+	// Removing deletes the file and subsequent Read returns ErrNotFound.
 	if err := RemoveMeta(name); err != nil {
 		t.Fatalf("RemoveMeta: %v", err)
 	}
-	scopePath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "golang.yaml")
-	if _, err := os.Stat(scopePath); !os.IsNotExist(err) {
-		t.Errorf("scope file still exists: %v", err)
-	}
-	secrets, err := ReadScope(name.Scope)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := secrets[name.Leaf]; ok {
-		t.Error("the secret still exists after the removal")
+	if _, err := Read(name); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Read after RemoveMeta = %v, want ErrNotFound", err)
 	}
 }
 
-// TestScanEffectivePrecedence resolves global, profile, and project scopes
-// with project > profile > global, deduping by env var name.
-func TestScanEffectivePrecedence(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	hash, err := config.DirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	scopeDoc := func(allow string) string {
-		return "secrets:\n  EXAMPLE_API_KEY:\n    allow:\n      - \"" + allow + "\"\n"
-	}
-	testutil.WriteConfigFile(t, "secrets/global.yaml", scopeDoc("global.example.com"))
-	testutil.WriteConfigFile(t, "secrets/"+hash+".yaml", scopeDoc("project.example.com"))
-	testutil.WriteConfigFile(t, "secrets/golang.yaml", testutil.Fixture(t, "secrets/precedence/golang.yaml"))
-
-	effective, err := ScanEffective("golang")
-	if err != nil {
-		t.Fatalf("ScanEffective: %v", err)
-	}
-	if len(effective) != 2 {
-		t.Fatalf("effective = %+v, want 2 secrets", effective)
-	}
-	if effective[0].EnvVar != "EXAMPLE_API_KEY" || effective[0].Allow[0] != "project.example.com" {
-		t.Errorf("EXAMPLE_API_KEY = %+v, want allow project.example.com", effective[0])
-	}
-	if effective[1].EnvVar != "OTHER_SECRET" || effective[1].Allow[0] != "other.example.com" {
-		t.Errorf("OTHER_SECRET = %+v, want other.example.com", effective[1])
-	}
-
-	// Another profile sees the global and the project scope, but never
-	// another profile's secrets.
-	effective, err = ScanEffective("web")
-	if err != nil {
-		t.Fatalf("ScanEffective(web): %v", err)
-	}
-	if len(effective) != 1 {
-		t.Fatalf("web effective = %+v, want only the project secret", effective)
-	}
-	if effective[0].EnvVar != "EXAMPLE_API_KEY" || effective[0].Allow[0] != "project.example.com" {
-		t.Errorf("web effective = %+v, want the project secret", effective[0])
-	}
-}
-
-// TestTemplate covers the scope-file skeletons: the settings comments, and
-// the project path only for the current directory's project scope.
+// TestTemplate covers the secret settings skeleton: it validates out of the
+// box.
 func TestTemplate(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	global, err := Template(config.Scope{})
+	tmpl, err := Template("EXAMPLE_API_KEY")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(global, "secrets:") || !strings.Contains(global, "motte secrets set") {
-		t.Errorf("global template = %q, want the settings comments", global)
+	if !strings.Contains(tmpl, "# motte secret — EXAMPLE_API_KEY") ||
+		!strings.Contains(tmpl, "motte secrets set EXAMPLE_API_KEY") {
+		t.Errorf("Template = %q, want the header comments", tmpl)
 	}
-	project, err := Template(config.Scope{Hash: mustDirHash(t)})
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", tmpl)
+	spec, err := Read("EXAMPLE_API_KEY")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Read(template): %v", err)
 	}
-	if !strings.Contains(project, "Project path: ") {
-		t.Errorf("project template = %q, want the project path", project)
-	}
-	foreign, err := Template(config.Scope{Hash: "1234567890ab"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(foreign, "Project path: ") {
-		t.Errorf("foreign template = %q, want no project path", foreign)
+	if len(spec.Allow) != 1 || spec.Allow[0] != "api.example.com" {
+		t.Errorf("template spec = %+v", spec)
 	}
 }
 

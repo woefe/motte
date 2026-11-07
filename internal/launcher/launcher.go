@@ -1,9 +1,9 @@
-// The launcher: motte's boot flow. It assembles the effective profile (the
-// built-in definition with the user's network policy entries merged in and
-// the user's OpenCode config mounted),
-// resolves the keychain secrets, creates or reuses this directory's sandbox
-// via the microsandbox Go SDK, converges the sandbox's secrets onto the
-// desired set, and attaches the terminal to the profile's workload.
+// The launcher: motte's boot flow. It reads this directory's project config,
+// merges the always-on base policy, the selected policy groups, and the
+// project's extra allow entries into one allow list, mounts the user's
+// OpenCode config, resolves the keychain secrets, creates or reuses this
+// directory's sandbox via the microsandbox Go SDK, converges the sandbox's
+// secrets onto the desired set, and attaches the terminal to the workload.
 package launcher
 
 import (
@@ -16,30 +16,32 @@ import (
 	m "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/policies"
-	"github.com/woefe/motte/internal/profile"
+	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/secrets"
 )
 
-// Boot launches the profile's sandbox and returns the workload's exit code.
-func Boot(profileName string, noPull, replace bool) (int, error) {
-	p, err := loadProfile(profileName)
+// Boot launches this directory's project sandbox and returns the workload's
+// exit code.
+func Boot(noPull, replace bool) (int, error) {
+	proj, projectPath, err := loadProject()
 	if err != nil {
 		return 1, err
 	}
-	if len(p.Cmd) == 0 {
-		return 1, fmt.Errorf("profile %s has no cmd to attach to", profileName)
+	allow, err := EffectiveAllow(proj, projectPath)
+	if err != nil {
+		return 1, err
 	}
 
-	// Resolve the effective secrets from the OS keychain and feed them to the
-	// runtime via host env vars; the env vars are only needed until the
-	// sandbox booted.
-	resolved, err := resolveSecrets(p, secrets.DefaultStore())
+	// Resolve the project's selected secrets from the OS keychain and feed
+	// them to the runtime via host env vars; the env vars are cleared once the
+	// sandbox has booted.
+	resolved, err := resolveSecrets(proj.Secrets, secrets.DefaultStore())
 	if err != nil {
 		return 1, err
 	}
 	defer unsetSecretEnv(resolved)
 
-	opts, err := sandboxOptions(p, noPull)
+	opts, err := sandboxOptions(proj.Image, allow, noPull)
 	if err != nil {
 		return 1, err
 	}
@@ -52,20 +54,20 @@ func Boot(profileName string, noPull, replace bool) (int, error) {
 		return 1, fmt.Errorf("ensuring the microsandbox runtime: %w", err)
 	}
 
-	name, err := sandboxName(profileName)
+	name, err := sandboxName()
 	if err != nil {
 		return 1, err
 	}
-	fingerprint := policies.Fingerprint(p)
+	fingerprint := policies.Fingerprint(proj.Image, allow)
 	state := launchState{secrets: resolved, policyFingerprint: fingerprint}
 	sandbox, err := openSandbox(ctx, name, opts, replace, state)
+	unsetSecretEnv(resolved)
 	if err != nil {
 		return 1, err
 	}
 	slog.Info("using sandbox", "name", name)
 
-	// Bridge this terminal to the profile's cmd workload; blocks until the
-	// workload exits.
+	// Bridge this terminal to the workload; blocks until the workload exits.
 	code, attachErr := sandbox.AttachDefault(ctx)
 
 	// Stop always runs, even on attach errors; the named sandbox and its
@@ -82,46 +84,56 @@ func Boot(profileName string, noPull, replace bool) (int, error) {
 	return code, nil
 }
 
-// loadProfile returns the effective profile: the built-in definition with
-// the user's policy entries merged on top of the built-in egress policy and
-// the user's OpenCode config directory mounted read-only at /etc/opencode.
-func loadProfile(name string) (*profile.Profile, error) {
-	p, err := profile.Load(name)
-	if err != nil {
-		return nil, err
+// loadProject reads the current directory's project config, or fails with a
+// hint to run `motte init` when none exists yet.
+func loadProject() (project.Config, string, error) {
+	proj, path, err := project.ReadCurrent()
+	if errors.Is(err, project.ErrNotFound) {
+		return project.Config{}, path, fmt.Errorf(
+			"no project configured for this directory (%s); run `motte init` first",
+			path,
+		)
 	}
-	extra, err := policies.Allow(name)
 	if err != nil {
-		return nil, err
+		return project.Config{}, path, err
 	}
-	p.ExtendAllow(extra)
-	opencodeDir, err := config.EnsureOpencodeConfig()
-	if err != nil {
-		return nil, err
-	}
-	p.Mounts = append(p.Mounts, profile.MountSpec{
-		HostPath:  opencodeDir,
-		GuestPath: "/etc/opencode",
-		Readonly:  true,
-		Nosuid:    true,
-		Nodev:     true,
-	})
-	return p, nil
+	return proj, path, nil
 }
 
-// sandboxName returns the msb VM name for a profile in this directory: the
-// directory hash is prefixed to the profile name, so the VM persists per
-// directory instead of being recreated on every run.
-func sandboxName(profileName string) (string, error) {
+// EffectiveAllow computes the deduplicated egress allow list for a project
+// config: the always-on base policy plus every selected policy group plus the
+// project's network.allow entries. A selected group without a file fails with
+// projectPath in the error.
+func EffectiveAllow(proj project.Config, projectPath string) ([]string, error) {
+	allow := policies.BaseAllow()
+	for _, group := range proj.AllowGroups {
+		entries, err := policies.ReadGroup(group)
+		if errors.Is(err, policies.ErrGroupNotFound) {
+			return nil, fmt.Errorf(
+				"project config %s: policy group %q does not exist; create it with `motte policies configure %s`",
+				projectPath, group, group,
+			)
+		}
+		if err != nil {
+			return nil, err
+		}
+		allow = policies.ExtendAllow(allow, entries)
+	}
+	allow = policies.ExtendAllow(allow, proj.Allow)
+	return allow, nil
+}
+
+// sandboxName returns the msb VM name for this directory: `motte-<dir-hash>`.
+func sandboxName() (string, error) {
 	hash, err := config.DirHash()
 	if err != nil {
 		return "", err
 	}
-	return hash + "-motte-" + profileName, nil
+	return "motte-" + hash, nil
 }
 
 // launchState is the desired state of a launch: the resolved secrets and the
-// fingerprint of the effective network policy.
+// fingerprint of the image and effective network policy.
 type launchState struct {
 	secrets           []secrets.Spec
 	policyFingerprint string
@@ -145,6 +157,8 @@ func openSandbox(
 			return nil, err
 		}
 		if err := convergeAfterCreate(ctx, sandbox, state.secrets); err != nil {
+			_ = sandbox.Stop(ctx)
+			_ = sandbox.Close()
 			return nil, err
 		}
 		return sandbox, nil
@@ -162,6 +176,8 @@ func openSandbox(
 	sandbox, createErr := createSandbox(ctx, name, opts)
 	if createErr == nil {
 		if err := convergeAfterCreate(ctx, sandbox, state.secrets); err != nil {
+			_ = sandbox.Stop(ctx)
+			_ = sandbox.Close()
 			return nil, err
 		}
 		return sandbox, nil
@@ -225,9 +241,8 @@ func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, 
 	return nil
 }
 
-// reportPolicyDrift tells the user that a reused VM runs a network policy
-// that is no longer the current one. The policy is part of the sandbox
-// config, so it only reaches a recreated VM.
+// reportPolicyDrift tells the user that a reused VM runs an image or network
+// policy that is no longer the current one.
 func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 	config, err := handle.Config()
 	if err != nil || config.Labels == nil {
@@ -237,7 +252,9 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 	if !ok || stored == fingerprint {
 		return
 	}
-	slog.Warn("the network policy changed since this VM was created; recreate it with --replace to apply it")
+	slog.Warn(
+		"the project image or network policy changed since this VM was created; recreate it with --replace to apply it",
+	)
 }
 
 // modifySecrets builds and applies the convergence patch from the drift
@@ -271,38 +288,48 @@ func reportModifications(plan *m.SandboxModificationPlan, name string) {
 	slog.Info("sandbox reboots to apply secret changes", "name", name, "changes", len(plan.Changes))
 }
 
-// resolveSecrets returns the effective secret set for a launch: scanned from
-// the user's secret configs with precedence applied, validated, egress
-// extended with their allow entries, and values pulled from the keychain into
-// host env vars for the sandbox boot.
-func resolveSecrets(p *profile.Profile, store secrets.Store) ([]secrets.Spec, error) {
-	configured, err := secrets.ScanEffective(p.Name)
-	if err != nil {
-		return nil, err
-	}
-	if count, err := secrets.CountAll(); err == nil && count == 0 {
-		slog.Info("no secrets configured; store API keys in the OS keychain with: motte secrets add")
-	}
-	var egress []string
-	for _, secret := range configured {
-		egress = append(egress, secret.Allow...)
-	}
-	p.ExtendAllow(egress)
-	for _, secret := range configured {
-		value, err := store.Get(secret.Name)
+// resolveSecrets loads the settings and keychain values of the selected secret
+// names into host env vars for the sandbox boot. Secret allow hosts do not
+// widen the network egress allow list.
+func resolveSecrets(selected []string, store secrets.Store) ([]secrets.Spec, error) {
+	var resolved []secrets.Spec
+	seen := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		spec, err := secrets.Read(name)
 		if errors.Is(err, secrets.ErrNotFound) {
+			unsetSecretEnv(resolved)
 			return nil, fmt.Errorf(
-				"secret %s is not in the keychain — set it with: motte secrets set %s",
-				secret.Name, secret.Name)
+				"secret %s is not configured — create it with: motte secrets add",
+				name,
+			)
 		}
 		if err != nil {
+			unsetSecretEnv(resolved)
 			return nil, err
 		}
-		if err := os.Setenv(secrets.HostEnvVar(secret.EnvVar), value); err != nil {
-			return nil, fmt.Errorf("exporting %s: %w", secrets.HostEnvVar(secret.EnvVar), err)
+		value, err := store.Get(spec.Name)
+		if errors.Is(err, secrets.ErrNotFound) {
+			unsetSecretEnv(resolved)
+			return nil, fmt.Errorf(
+				"secret %s is not in the keychain — set it with: motte secrets set %s",
+				spec.Name, spec.Name,
+			)
 		}
+		if err != nil {
+			unsetSecretEnv(resolved)
+			return nil, err
+		}
+		if err := os.Setenv(secrets.HostEnvVar(spec.EnvVar), value); err != nil {
+			unsetSecretEnv(resolved)
+			return nil, fmt.Errorf("exporting %s: %w", secrets.HostEnvVar(spec.EnvVar), err)
+		}
+		resolved = append(resolved, spec)
 	}
-	return configured, nil
+	return resolved, nil
 }
 
 // unsetSecretEnv clears the host env vars secrets resolve through.

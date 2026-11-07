@@ -1,4 +1,0 @@
-network:
-  allow:
-    - "global.example.com"
-    - "*.opencode.ai"

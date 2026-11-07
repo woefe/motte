@@ -1,8 +1,10 @@
 // The motte command tree.
 //
-//	motte opencode <profile> [--no-pull] [--replace]
+//	motte init
+//	motte opencode [--no-pull] [--replace]
+//	motte oc [--no-pull] [--replace]
 //	motte policies ls
-//	motte policies configure <scope>
+//	motte policies configure <group>
 //	motte secrets <add|set|configure|rm|ls>
 //
 // The tree is built with cobra; every command carries its own help. Errors
@@ -15,13 +17,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/launcher"
-	"github.com/woefe/motte/internal/profile"
 	"github.com/woefe/motte/internal/secrets"
 )
 
@@ -37,8 +36,9 @@ func (e exitCoder) Error() string { return e.message }
 // ExitCode returns the exit code the command exits with.
 func (e exitCoder) ExitCode() int { return e.code }
 
-// bootFunc runs a profile's sandbox and returns the workload's exit code.
-type bootFunc func(profileName string, noPull, replace bool) (int, error)
+// bootFunc runs the current directory's project sandbox and returns the
+// workload's exit code.
+type bootFunc func(noPull, replace bool) (int, error)
 
 // env holds the external dependencies of the CLI command tree.
 type env struct {
@@ -90,8 +90,8 @@ func newRootCommand(e env) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "motte",
 		Short: "launch isolated OpenCode development environments",
-		Long: "motte runs a profile in an isolated microVM and attaches the OpenCode TUI to it.\n" +
-			"Secrets live in the OS keychain, network policies in ~/.config/motte/policies.",
+		Long: "motte runs this directory's project in an isolated microVM and attaches the OpenCode TUI to it.\n" +
+			"Project configs live in ~/.config/motte/projects, policy groups in ~/.config/motte/policies, and secrets in the OS keychain.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
@@ -104,7 +104,12 @@ func newRootCommand(e env) *cobra.Command {
 	// formatting; the root command asks for the suggestions itself.
 	root.SuggestionsMinimumDistance = 2
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.AddCommand(opencodeCommand(e.boot), policiesCommand(), secretsCommand(e.store))
+	root.AddCommand(
+		initCommand(),
+		opencodeCommand(e.boot),
+		policiesCommand(),
+		secretsCommand(e.store),
+	)
 	return root
 }
 
@@ -116,29 +121,26 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return exitCoder{code: 1}
 	}
 	arg := args[0]
-	if slices.Contains(profile.Available(), arg) {
-		return exitCoder{code: 1, message: fmt.Sprintf(
-			"unknown command %q; did you mean %q?", arg, "motte oc "+arg)}
-	}
 	if suggestions := cmd.Root().SuggestionsFor(arg); len(suggestions) > 0 {
 		return exitCoder{code: 1, message: fmt.Sprintf(
 			"unknown command %q; did you mean %q?", arg, "motte "+suggestions[0])}
 	}
 	return exitCoder{code: 1, message: fmt.Sprintf(
-		"unknown command %q; expected opencode, oc, policies, or secrets", arg)}
+		"unknown command %q; expected init, opencode, oc, policies, or secrets", arg)}
 }
 
-// opencodeCommand boots a profile and attaches the OpenCode TUI to it.
+// opencodeCommand boots this directory's project and attaches the OpenCode TUI
+// to it.
 func opencodeCommand(boot bootFunc) *cobra.Command {
 	var noPull, replace bool
 	cmd := &cobra.Command{
-		Use:     "opencode <profile>",
+		Use:     "opencode",
 		Aliases: []string{"oc"},
-		Short:   "boot a profile and attach the OpenCode TUI",
-		Long:    "The profile is a built-in one: " + strings.Join(profile.Available(), ", ") + ".",
-		Args:    singleArg,
+		Short:   "boot this directory's project and attach the OpenCode TUI",
+		Long:    "Boots the project configured for the current directory (run `motte init` to configure it).",
+		Args:    noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			code, err := boot(args[0], noPull, replace)
+			code, err := boot(noPull, replace)
 			if err != nil {
 				return err
 			}
@@ -151,6 +153,15 @@ func opencodeCommand(boot bootFunc) *cobra.Command {
 	cmd.Flags().BoolVar(&noPull, "no-pull", false, "skip the registry pull so a locally loaded image can win")
 	cmd.Flags().BoolVar(&replace, "replace", false, "recreate the VM instead of reusing this directory's VM")
 	return cmd
+}
+
+// noArgs accepts no positional arguments; any argument prints the command
+// help.
+func noArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return argHelpError(cmd)
 }
 
 // singleArg accepts exactly one argument; any other count prints the command

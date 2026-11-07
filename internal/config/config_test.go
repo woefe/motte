@@ -3,13 +3,14 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/woefe/motte/internal/testutil"
 )
 
 // TestMotteConfigTree pins the layout under the user config dir: one directory
-// per config family, holding one file per scope.
+// per config family.
 func TestMotteConfigTree(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte")
@@ -18,6 +19,7 @@ func TestMotteConfigTree(t *testing.T) {
 		want string
 	}{
 		{dir: ConfigDir, want: root},
+		{dir: ProjectsDir, want: filepath.Join(root, "projects")},
 		{dir: PoliciesDir, want: filepath.Join(root, "policies")},
 		{dir: SecretsDir, want: filepath.Join(root, "secrets")},
 		{dir: OpencodeDir, want: filepath.Join(root, "opencode")},
@@ -33,6 +35,17 @@ func TestMotteConfigTree(t *testing.T) {
 	}
 	if got := Hint(); got != root {
 		t.Errorf("Hint = %q, want %q", got, root)
+	}
+}
+
+// TestDirHash returns a 12-hex digest of the resolved working directory.
+func TestDirHash(t *testing.T) {
+	hash, err := DirHash()
+	if err != nil {
+		t.Fatalf("DirHash: %v", err)
+	}
+	if len(hash) != 12 {
+		t.Errorf("DirHash = %q, want 12 hex chars", hash)
 	}
 }
 
@@ -80,8 +93,8 @@ func TestEnsureOpencodeConfig(t *testing.T) {
 // directories are created and the contents land verbatim with the config file
 // mode.
 func TestWriteNewFileCreatesParents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "deeper", "global.yaml")
-	const skeleton = "network:\n  allow: []\n"
+	path := filepath.Join(t.TempDir(), "nested", "deeper", "work.yaml")
+	const skeleton = "allow: []\n"
 	if err := WriteNewFile(path, skeleton); err != nil {
 		t.Fatalf("WriteNewFile: %v", err)
 	}
@@ -98,5 +111,32 @@ func TestWriteNewFileCreatesParents(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("%s mode = %#o, want 0600", path, perm)
+	}
+}
+
+// TestListYAMLNames returns sorted stems of .yaml files and ignores non-YAML
+// entries or missing directories.
+func TestListYAMLNames(t *testing.T) {
+	testutil.IsolatedConfigDir(t)
+	root, err := PoliciesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"work-vpn.yaml", "corp.yaml", "ignore.yml"} {
+		testutil.WriteConfigFile(t, "policies/"+name, "")
+	}
+	if err := os.Mkdir(filepath.Join(root, "subdir.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	names, err := ListYAMLNames(root)
+	if err != nil {
+		t.Fatalf("ListYAMLNames: %v", err)
+	}
+	want := []string{"corp", "work-vpn"}
+	if !slices.Equal(names, want) {
+		t.Errorf("names = %v, want %v", names, want)
+	}
+	if missing, err := ListYAMLNames(filepath.Join(root, "missing")); err != nil || missing != nil {
+		t.Errorf("ListYAMLNames(missing) = %v %v, want nil", missing, err)
 	}
 }
