@@ -3,62 +3,42 @@ package cli
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/secrets"
 	"github.com/woefe/motte/internal/testutil"
 )
 
 // readSpec returns the configured settings of a secret, failing the test
-// when its scope file is invalid or the secret is missing.
-func readSpec(t *testing.T, n secrets.Name) secrets.Spec {
+// when its settings file is invalid or missing.
+func readSpec(t *testing.T, name string) secrets.Spec {
 	t.Helper()
-	configured, err := secrets.ReadScope(n.Scope)
+	spec, err := secrets.Read(name)
 	if err != nil {
-		t.Fatalf("ReadScope(%s): %v", n.Full, err)
-	}
-	spec, ok := configured[n.Leaf]
-	if !ok {
-		t.Fatalf("secret %s is not configured", n.Full)
+		t.Fatalf("secrets.Read(%s): %v", name, err)
 	}
 	return spec
 }
 
-// TestSecretsLsListsGroups covers the grouped listing: rows aligned by name,
-// the current-directory mark, placeholder bodies, and the shadowing note.
-func TestSecretsLsListsGroups(t *testing.T) {
+// TestSecretsLsListsSecrets covers the flat listing: rows aligned by name with
+// keychain presence and allowed hosts.
+func TestSecretsLsListsSecrets(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "value"})
-	hash, err := config.DirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	testutil.WriteConfigFile(t, "secrets/global.yaml", testutil.Fixture(t, "secrets/ls/global.yaml"))
-	testutil.WriteConfigFile(t, "secrets/golang.yaml", "secrets:\n")
-	testutil.WriteConfigFile(t, "secrets/"+hash+".yaml", testutil.Fixture(t, "secrets/ls/project.yaml"))
+	testutil.WriteConfigFile(t, "secrets/ANOTHER_KEY.yaml", "allow:\n  - \"a.example.com\"\n  - \"b.example.com\"\n")
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow:\n  - \"*.opencode.ai\"\n")
 	var outBuf, errBuf bytes.Buffer
 	if err := runSecretsLs(&outBuf, &errBuf, store); err != nil {
 		t.Errorf("runSecretsLs: %v", err)
 	}
 	stdout, stderr := outBuf.String(), errBuf.String()
-	want := fmt.Sprintf(`global:
-  ANOTHER_KEY      keychain: no  allow: a.example.com, b.example.com
-  EXAMPLE_API_KEY  keychain: yes  allow: *.opencode.ai
-
-profile golang:
-  (no secrets)
-
-project %s (this directory):
-  %s/EXAMPLE_API_KEY  keychain: no  allow: project.example.com
-
-note: EXAMPLE_API_KEY is configured in 2 scopes; the most specific wins
-`, hash, hash)
+	want := `ANOTHER_KEY      keychain: no  allow: a.example.com, b.example.com
+EXAMPLE_API_KEY  keychain: yes  allow: *.opencode.ai
+`
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -67,7 +47,7 @@ note: EXAMPLE_API_KEY is configured in 2 scopes; the most specific wins
 	}
 }
 
-// TestSecretsLsEmpty prints the create hint when no scope file exists.
+// TestSecretsLsEmpty prints the create hint when no secret file exists.
 func TestSecretsLsEmpty(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	store := testutil.NewFakeStore(secrets.ErrNotFound, nil)
@@ -84,52 +64,40 @@ func TestSecretsLsEmpty(t *testing.T) {
 	}
 }
 
-// TestSecretsLsReportsUnreadableScopes shows a scope's parse error under its
-// group header.
-func TestSecretsLsReportsUnreadableScopes(t *testing.T) {
+// TestSecretsLsReportsUnreadableSecrets shows a secret file's parse error on
+// its row.
+func TestSecretsLsReportsUnreadableSecrets(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	store := testutil.NewFakeStore(secrets.ErrNotFound, nil)
-	testutil.WriteConfigFile(t, "secrets/global.yaml", "secrets: [oops\n")
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow: [oops\n")
 	var outBuf, errBuf bytes.Buffer
 	if err := runSecretsLs(&outBuf, &errBuf, store); err != nil {
 		t.Errorf("runSecretsLs: %v", err)
 	}
 	stdout := outBuf.String()
-	if !strings.HasPrefix(stdout, "global:\n  <unreadable: ") {
-		t.Errorf("stdout = %q, want the unreadable group", stdout)
+	if !strings.HasPrefix(stdout, "EXAMPLE_API_KEY  <unreadable: ") {
+		t.Errorf("stdout = %q, want the unreadable row", stdout)
 	}
 }
 
 // TestSecretsConfigureCreatesAndValidates covers the configure command: a
-// missing scope file is created from the template and validates, and the
-// project scope gets a file of its own.
+// missing secret file is created from the template and validates afterwards.
 func TestSecretsConfigureCreatesAndValidates(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	testutil.FakeEditor(t)
-	if err := runSecretsConfigure(io.Discard, "global"); err != nil {
+	if err := runSecretsConfigure(io.Discard, "EXAMPLE_API_KEY"); err != nil {
 		t.Fatalf("runSecretsConfigure: %v", err)
 	}
-	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "global.yaml")
+	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "motte", "secrets", "EXAMPLE_API_KEY.yaml")
 	content, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading the scope file: %v", err)
+		t.Fatalf("reading the secret file: %v", err)
 	}
-	if !strings.Contains(string(content), "secrets:") {
-		t.Errorf("scope file = %q, want the template", string(content))
+	if !strings.Contains(string(content), "# motte secret — EXAMPLE_API_KEY") {
+		t.Errorf("secret file = %q, want the template", string(content))
 	}
-	if _, err := secrets.ReadScope(config.Scope{}); err != nil {
+	if _, err := secrets.Read("EXAMPLE_API_KEY"); err != nil {
 		t.Errorf("the template does not validate: %v", err)
-	}
-
-	if err := runSecretsConfigure(io.Discard, "project"); err != nil {
-		t.Fatalf("runSecretsConfigure(project): %v", err)
-	}
-	projectFile, err := secrets.ScopePath(config.Scope{Hash: mustDirHash(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.ReadFile(projectFile); err != nil {
-		t.Fatalf("reading the project scope file: %v", err)
 	}
 }
 
@@ -138,49 +106,48 @@ func TestSecretsConfigureCreatesAndValidates(t *testing.T) {
 func TestSecretsConfigureRejectsAnInvalidFile(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
 	testutil.FakeEditor(t)
-	testutil.WriteConfigFile(t, "secrets/global.yaml", "secrets:\n  KEY: [oops\n")
-	assertConfigureRejects(t, runSecretsConfigure)
+	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow: [oops\n")
+	assertConfigureRejects(t, runSecretsConfigure, "EXAMPLE_API_KEY")
 }
 
-// TestSecretsCommandsSurfaceScopeFileErrors covers add, set, and rm against a
-// corrupt scope file: the real error with the configure hint, instead of a
-// masked not-configured error.
-func TestSecretsCommandsSurfaceScopeFileErrors(t *testing.T) {
+// TestSecretsCommandsSurfaceFileErrors covers add, set, and rm against a
+// corrupt secret settings file: the real error with the configure hint,
+// instead of a masked not-configured error.
+func TestSecretsCommandsSurfaceFileErrors(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"golang/API_KEY": "old"})
-	testutil.WriteConfigFile(t, "secrets/golang.yaml", "secrets:\n  API_KEY: [oops\n")
+	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"API_KEY": "old"})
+	testutil.WriteConfigFile(t, "secrets/API_KEY.yaml", "allow: [oops\n")
 	commands := []struct {
 		name string
 		run  func() error
 	}{
 		{name: "add", run: func() error {
-			in := bufio.NewReader(strings.NewReader("API_KEY\np\ngolang\n"))
+			in := bufio.NewReader(strings.NewReader("API_KEY\n"))
 			return addSecret(in, strings.NewReader(""), io.Discard, store)
 		}},
 		{name: "set", run: func() error {
-			return runSecretsSet(strings.NewReader(""), io.Discard, store, "golang/API_KEY")
+			return runSecretsSet(strings.NewReader(""), io.Discard, store, "API_KEY")
 		}},
 		{name: "rm", run: func() error {
-			return runSecretsRm(strings.NewReader(""), io.Discard, store, "golang/API_KEY", true)
+			return runSecretsRm(strings.NewReader(""), io.Discard, store, "API_KEY", true)
 		}},
 	}
 	for _, command := range commands {
 		t.Run(command.name, func(t *testing.T) {
 			err := command.run()
 			if err == nil || !strings.Contains(err.Error(), "invalid secret config") ||
-				!strings.Contains(err.Error(), "motte secrets configure golang") {
+				!strings.Contains(err.Error(), "motte secrets configure API_KEY") {
 				t.Errorf("error = %v, want the invalid-config error with the configure hint", err)
 			}
 		})
 	}
 
-	// A healthy scope without the secret: set points at add, rm does not.
-	testutil.WriteConfigFile(t, "secrets/golang.yaml", "secrets:\n  OTHER:\n    allow: [\"*.example.com\"]\n")
-	if err := runSecretsSet(strings.NewReader(""), io.Discard, store, "golang/API_KEY"); err == nil ||
+	// Missing secret file: set points at add, rm does not.
+	if err := runSecretsSet(strings.NewReader(""), io.Discard, store, "MISSING_KEY"); err == nil ||
 		!strings.Contains(err.Error(), "motte secrets add") {
 		t.Errorf("set error = %v, want the add hint", err)
 	}
-	if err := runSecretsRm(strings.NewReader(""), io.Discard, store, "golang/API_KEY", true); err == nil ||
+	if err := runSecretsRm(strings.NewReader(""), io.Discard, store, "MISSING_KEY", true); err == nil ||
 		strings.Contains(err.Error(), "add") {
 		t.Errorf("rm error = %v, want no create hint", err)
 	}
@@ -192,12 +159,11 @@ func TestSecretsCommandsSurfaceScopeFileErrors(t *testing.T) {
 // value prompts for it.
 func TestAddSecretUpsert(t *testing.T) {
 	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "secrets/global.yaml",
-		"secrets:\n  FOO:\n    allow:\n      - \"*.foo.example.com\"\n")
+	testutil.WriteConfigFile(t, "secrets/FOO.yaml", "allow:\n  - \"*.foo.example.com\"\n")
 	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"FOO": "current"})
 
 	err := addSecret(
-		bufio.NewReader(strings.NewReader("BAR\n\n*.bar.example.com\n")),
+		bufio.NewReader(strings.NewReader("BAR\n*.bar.example.com\n")),
 		strings.NewReader("bar-value\n"),
 		io.Discard,
 		store,
@@ -208,34 +174,26 @@ func TestAddSecretUpsert(t *testing.T) {
 	if store.Items["BAR"] != "bar-value" {
 		t.Errorf("keychain BAR = %q, want bar-value", store.Items["BAR"])
 	}
-	bar, err := secrets.ParseName("BAR")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if spec := readSpec(t, bar); spec.Allow[0] != "*.bar.example.com" {
+	if spec := readSpec(t, "BAR"); spec.Allow[0] != "*.bar.example.com" {
 		t.Errorf("BAR allow = %v, want the entered hosts", spec.Allow)
 	}
 
 	// Settings-only change: the prefilled default is accepted, the value
 	// prompt is skipped, the keychain value stays.
-	foo, err := secrets.ParseName("FOO")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = addSecret(bufio.NewReader(strings.NewReader("FOO\n\n\nn\n")), strings.NewReader(""), io.Discard, store)
+	err = addSecret(bufio.NewReader(strings.NewReader("FOO\n\nn\n")), strings.NewReader(""), io.Discard, store)
 	if err != nil {
 		t.Fatalf("addSecret: %v", err)
 	}
 	if store.Items["FOO"] != "current" {
 		t.Errorf("keychain FOO = %q, want the kept value", store.Items["FOO"])
 	}
-	if spec := readSpec(t, foo); spec.Allow[0] != "*.foo.example.com" {
+	if spec := readSpec(t, "FOO"); spec.Allow[0] != "*.foo.example.com" {
 		t.Errorf("FOO allow = %v, want the prefilled default", spec.Allow)
 	}
 
 	// Value replaced on request, hosts changed with it.
 	err = addSecret(
-		bufio.NewReader(strings.NewReader("FOO\n\n*.new.example.com\ny\n")),
+		bufio.NewReader(strings.NewReader("FOO\n*.new.example.com\ny\n")),
 		strings.NewReader("new-value\n"),
 		io.Discard,
 		store,
@@ -246,65 +204,21 @@ func TestAddSecretUpsert(t *testing.T) {
 	if store.Items["FOO"] != "new-value" {
 		t.Errorf("keychain FOO = %q, want new-value", store.Items["FOO"])
 	}
-	if spec := readSpec(t, foo); spec.Allow[0] != "*.new.example.com" {
+	if spec := readSpec(t, "FOO"); spec.Allow[0] != "*.new.example.com" {
 		t.Errorf("FOO allow = %v, want the new hosts", spec.Allow)
 	}
 
 	// A configured secret without a keychain value prompts for one.
 	empty := testutil.NewFakeStore(secrets.ErrNotFound, nil)
-	err = addSecret(bufio.NewReader(strings.NewReader("FOO\n\n\n")), strings.NewReader("restored\n"), io.Discard, empty)
+	err = addSecret(bufio.NewReader(strings.NewReader("FOO\n\n")), strings.NewReader("restored\n"), io.Discard, empty)
 	if err != nil {
 		t.Fatalf("addSecret: %v", err)
 	}
 	if empty.Items["FOO"] != "restored" {
 		t.Errorf("keychain FOO = %q, want restored", empty.Items["FOO"])
 	}
-	if spec := readSpec(t, foo); spec.Allow[0] != "*.new.example.com" {
+	if spec := readSpec(t, "FOO"); spec.Allow[0] != "*.new.example.com" {
 		t.Errorf("FOO allow = %v, want the kept hosts", spec.Allow)
-	}
-}
-
-// TestAddSecretOnAnEmptyScopeTemplate covers the first add on a scope file
-// that configure created from the template: its null `secrets:` widens into
-// a mapping, and the template's comments survive.
-func TestAddSecretOnAnEmptyScopeTemplate(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	scope := config.Scope{}
-	path, err := secrets.ScopePath(scope)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template, err := secrets.Template(scope)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := config.WriteNewFile(path, template); err != nil {
-		t.Fatalf("WriteNewFile: %v", err)
-	}
-	store := testutil.NewFakeStore(secrets.ErrNotFound, nil)
-	err = addSecret(
-		bufio.NewReader(strings.NewReader("BAR\n\n*.bar.example.com\n")),
-		strings.NewReader("bar-value\n"),
-		io.Discard,
-		store,
-	)
-	if err != nil {
-		t.Fatalf("addSecret: %v", err)
-	}
-	name, err := secrets.ParseName("BAR")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if spec := readSpec(t, name); spec.Allow[0] != "*.bar.example.com" {
-		t.Errorf("BAR allow = %v, want the entered hosts", spec.Allow)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(content), "# Values live in the OS keychain") ||
-		!strings.Contains(string(content), "# EXAMPLE_API_KEY:") {
-		t.Errorf("scope file = %q, want the template comments", string(content))
 	}
 }
 
@@ -320,6 +234,6 @@ func TestReadSecretValue(t *testing.T) {
 		t.Errorf("error = %v, want a single-line restriction", err)
 	}
 	if value, err := readSecretValue("value: ", io.Discard, strings.NewReader("")); err != nil || value != "" {
-		t.Errorf("readSecretValue(empty) = %q %v", value, err)
+		t.Errorf("readSecretValue(empty) = %q %v, want empty", value, err)
 	}
 }

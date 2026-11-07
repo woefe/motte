@@ -35,7 +35,7 @@ func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
 	code = runWithEnv(args, env{
-		boot:   func(string, bool, bool) (int, error) { return 0, nil },
+		boot:   func(bool, bool) (int, error) { return 0, nil },
 		store:  testutil.NewFakeStore(secrets.ErrNotFound, nil),
 		in:     strings.NewReader(""),
 		out:    &outBuf,
@@ -44,50 +44,44 @@ func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	return code, outBuf.String(), errBuf.String()
 }
 
-// TestOpenCodeBootsTheProfile checks that both command names resolve and hand
-// the profile and their flags to the boot.
-func TestOpenCodeBootsTheProfile(t *testing.T) {
+// TestOpenCodeBootsTheProject checks that both command names resolve and hand
+// their flags to the boot without positional arguments.
+func TestOpenCodeBootsTheProject(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    []string
-		profile string
 		noPull  bool
 		replace bool
 	}{
-		{name: "oc", args: []string{"oc", "golang", "--replace"}, profile: "golang", replace: true},
-		{
-			name: "opencode", args: []string{"opencode", "web", "--no-pull", "--replace"},
-			profile: "web", noPull: true, replace: true,
-		},
+		{name: "oc default", args: []string{"oc"}},
+		{name: "oc replace", args: []string{"oc", "--replace"}, replace: true},
+		{name: "opencode flags", args: []string{"opencode", "--no-pull", "--replace"}, noPull: true, replace: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var gotProfile string
 			var gotNoPull, gotReplace bool
-			boot := func(profile string, noPull, replace bool) (int, error) {
-				gotProfile, gotNoPull, gotReplace = profile, noPull, replace
+			boot := func(noPull, replace bool) (int, error) {
+				gotNoPull, gotReplace = noPull, replace
 				return 0, nil
 			}
 			if err := executeWithBoot(t, boot, test.args...); err != nil {
 				t.Fatalf("execute: %v", err)
 			}
-			if gotProfile != test.profile || gotNoPull != test.noPull || gotReplace != test.replace {
-				t.Errorf("boot(%q, no-pull=%v, replace=%v), want (%q, no-pull=%v, replace=%v)",
-					gotProfile, gotNoPull, gotReplace, test.profile, test.noPull, test.replace)
+			if gotNoPull != test.noPull || gotReplace != test.replace {
+				t.Errorf("boot(no-pull=%v, replace=%v), want (no-pull=%v, replace=%v)",
+					gotNoPull, gotReplace, test.noPull, test.replace)
 			}
 		})
 	}
 
-	// The command takes exactly one profile.
-	for _, args := range [][]string{{"oc"}, {"oc", "golang", "web"}} {
-		if err := execute(t, args...); err == nil {
-			t.Errorf("execute(%v) = nil, want a usage error", args)
-		}
+	// Positional arguments are rejected with help output.
+	if err := execute(t, "oc", "golang"); err == nil {
+		t.Error("execute([oc golang]) = nil, want a usage error")
 	}
 }
 
 // TestRootCommandErrors covers the invocation without a subcommand: the help
-// is printed and the known profile names get a hint.
+// is printed and typos get a suggestion.
 func TestRootCommandErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -95,9 +89,8 @@ func TestRootCommandErrors(t *testing.T) {
 		wantRe string
 	}{
 		{name: "no command", wantRe: ""},
-		{name: "profile name", args: []string{"golang"}, wantRe: `did you mean "motte oc golang"`},
 		{name: "typo", args: []string{"secretes"}, wantRe: `did you mean "motte secrets"`},
-		{name: "unknown", args: []string{"frobnicate"}, wantRe: "expected opencode, oc, policies, or secrets"},
+		{name: "unknown", args: []string{"frobnicate"}, wantRe: "expected init, opencode, oc, policies, or secrets"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -129,7 +122,7 @@ func TestSecretsCommandErrors(t *testing.T) {
 		{"secrets", "rm", "a", "b"},
 		{"secrets", "add", "a"},
 		{"secrets", "ls", "a"},
-		{"secrets", "configure", "bogus"},
+		{"secrets", "configure", "bad-name"},
 	} {
 		if err := execute(t, args...); err == nil {
 			t.Errorf("execute(%v) = nil, want a usage error", args)
@@ -144,7 +137,7 @@ func TestPoliciesCommandErrors(t *testing.T) {
 		{"policies"},
 		{"policies", "bogus"},
 		{"policies", "configure"},
-		{"policies", "configure", "bogus"},
+		{"policies", "configure", "Bad_Group"},
 		{"policies", "ls", "a"},
 	} {
 		if err := execute(t, args...); err == nil {
@@ -154,8 +147,8 @@ func TestPoliciesCommandErrors(t *testing.T) {
 }
 
 // TestIncompleteCommandsPrintHelp checks that commands invoked with a missing
-// mandatory argument print their help alone, without an error message after
-// it, and exit with 1.
+// mandatory argument (or unexpected positional argument) print their help
+// alone, without an error message after it, and exit with 1.
 func TestIncompleteCommandsPrintHelp(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -163,33 +156,30 @@ func TestIncompleteCommandsPrintHelp(t *testing.T) {
 		wantRe string
 	}{
 		{
-			name: "oc without profile",
-			args: []string{"motte", "oc"},
-			wantRe: "The profile is a built-in one: base, golang, rails, web." +
-				"\n\nUsage:\n  motte opencode <profile> [flags]",
+			name:   "oc with unexpected arg",
+			args:   []string{"motte", "oc", "golang"},
+			wantRe: "Usage:\n  motte opencode [flags]",
 		},
 		{
-			name: "opencode without profile", args: []string{"motte", "opencode"},
-			wantRe: "Usage:\n  motte opencode <profile> [flags]",
-		},
-		{
-			name: "policies configure without scope",
+			name: "policies configure without group",
 			args: []string{"motte", "policies", "configure"},
-			wantRe: "The scope is global, project, a built-in profile name, or a project hash." +
-				"\n\nUsage:\n  motte policies configure <scope> [flags]",
+			wantRe: "The group name is a slug (lowercase letters, digits, and dashes)." +
+				"\n\nUsage:\n  motte policies configure <group> [flags]",
 		},
 		{
-			name: "secrets rm without name", args: []string{"motte", "secrets", "rm"},
+			name:   "secrets rm without name",
+			args:   []string{"motte", "secrets", "rm"},
 			wantRe: "Usage:\n  motte secrets rm <name> [flags]",
 		},
 		{
-			name: "secrets set without name", args: []string{"motte", "secrets", "set"},
+			name:   "secrets set without name",
+			args:   []string{"motte", "secrets", "set"},
 			wantRe: "Usage:\n  motte secrets set <name> [flags]",
 		},
 		{
-			name:   "secrets configure without scope",
+			name:   "secrets configure without name",
 			args:   []string{"motte", "secrets", "configure"},
-			wantRe: "Usage:\n  motte secrets configure <scope> [flags]",
+			wantRe: "Usage:\n  motte secrets configure <name> [flags]",
 		},
 	}
 	for _, test := range tests {
@@ -222,12 +212,16 @@ func TestRunExitCodes(t *testing.T) {
 		wantRe string // expected stderr substring
 	}{
 		{
-			name: "coded message", args: []string{"motte", "golang"},
-			want: 1, wantRe: `unknown command "golang"; did you mean "motte oc golang"`,
+			name:   "unknown command",
+			args:   []string{"motte", "frobnicate"},
+			want:   1,
+			wantRe: `unknown command "frobnicate"; expected init, opencode, oc, policies, or secrets`,
 		},
 		{
-			name: "usage error", args: []string{"motte", "policies", "ls", "a"},
-			want: 1, wantRe: "unknown command",
+			name:   "usage error",
+			args:   []string{"motte", "policies", "ls", "a"},
+			want:   1,
+			wantRe: "unknown command",
 		},
 		{name: "success", args: []string{"motte", "policies", "ls"}, want: 0},
 	}

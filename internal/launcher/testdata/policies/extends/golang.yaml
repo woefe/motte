@@ -1,4 +1,0 @@
-network:
-  allow:
-    - "*.github.com"
-    - "one.more.example.com"

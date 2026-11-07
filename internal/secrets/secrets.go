@@ -1,15 +1,13 @@
 // Secrets: user-configured credentials stored in the OS keychain.
 //
 // Secret values live in the system keyring (service "motte", account = the
-// secret's full path-like name) and never in motte's YAML configs or in a
-// durable sandbox config on the host: the launch flow only feeds the value
-// through a host env var, and the sandbox config stores a reference to that
-// var, which the runtime resolves at every sandbox start.
+// secret's env var name) and never in motte's YAML configs or in a durable
+// sandbox config on the host: the launch flow only feeds the value through a
+// host env var, and the sandbox config stores a reference to that var, which
+// the runtime resolves at every sandbox start.
 //
-// Names are path-like with scopes: NAME (global), <profile>/NAME (profile),
-// and <hash>/NAME (project, the current directory). The settings of a scope
-// live in one file under $XDG_CONFIG_HOME/motte/secrets: global.yaml,
-// <profile>.yaml, and <hash>.yaml.
+// Each secret's settings live in one file under $XDG_CONFIG_HOME/motte/secrets:
+// `<NAME>.yaml`.
 package secrets
 
 import (
@@ -18,16 +16,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/woefe/motte/internal/config"
-	"github.com/woefe/motte/internal/profile"
 	kr "github.com/zalando/go-keyring"
 	"go.yaml.in/yaml/v3"
 )
@@ -43,12 +38,11 @@ const (
 // DefaultHeaderFields is used when a secret entry omits them.
 var DefaultHeaderFields = []string{"authorization", "x-api-key"}
 
-// ErrNotFound reports a missing keychain entry.
+// ErrNotFound reports a missing keychain entry or secret settings file.
 var ErrNotFound = errors.New("secret not found")
 
-// Spec is one effective secret: its full path-like name, the guest env var
-// the placeholder appears under, and the substitution policy. The value
-// arrives separately, via the keychain.
+// Spec is one secret's configuration: its env var name and substitution
+// policy. The value arrives separately, via the keychain.
 type Spec struct {
 	Name         string
 	EnvVar       string
@@ -56,58 +50,40 @@ type Spec struct {
 	HeaderFields []string
 }
 
-// Name is a validated secret name plus its resolved scope and leaf env var.
-type Name struct {
-	Full  string
-	Scope config.Scope
-	Leaf  string
-}
+// secretNamePattern matches a valid secret env var name.
+var secretNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// secretLeafPattern matches the leaf (env var) segment of a secret name.
-var secretLeafPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// ParseName validates a path-like secret name and resolves its scope.
-// A single segment is a global secret; two segments are profile-scoped when
-// the first is a built-in profile name and project-scoped when it is a
-// project hash.
-func ParseName(name string) (Name, error) {
+// ValidateName checks that name is a valid environment variable name.
+func ValidateName(name string) error {
 	if name == "" {
-		return Name{}, fmt.Errorf("empty secret name")
+		return fmt.Errorf("empty secret name")
 	}
-	parts := strings.Split(name, "/")
-	n := Name{Full: name}
-	switch len(parts) {
-	case 1:
-	case 2:
-		switch {
-		case slices.Contains(profile.Available(), parts[0]):
-			n.Scope = config.Scope{Profile: parts[0]}
-		case config.ProjectHashPattern.MatchString(parts[0]):
-			n.Scope = config.Scope{Hash: parts[0]}
-		default:
-			return Name{}, fmt.Errorf(
-				"invalid secret name %q: %q is not a built-in profile (available: %s) nor a 12-hex project hash",
-				name, parts[0], strings.Join(profile.Available(), ", "),
-			)
-		}
-	default:
-		return Name{}, fmt.Errorf("invalid secret name %q: at most two segments", name)
+	if !secretNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid secret name %q: must be a valid env var name", name)
 	}
-	n.Leaf = parts[len(parts)-1]
-	if !secretLeafPattern.MatchString(n.Leaf) {
-		return Name{}, fmt.Errorf(
-			"invalid secret name %q: the last segment must be a valid env var name", name)
-	}
-	return n, nil
+	return nil
 }
 
-// ScopePath returns the file a scope's secret settings live in.
-func ScopePath(scope config.Scope) (string, error) {
+// Path returns the file a secret's settings live in after validating the name.
+func Path(name string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
+	}
 	root, err := config.SecretsDir()
 	if err != nil {
 		return "", err
 	}
-	return scope.PathIn(root), nil
+	return filepath.Join(root, name+".yaml"), nil
+}
+
+// ListNames returns the sorted names of the configured secrets under
+// ~/.config/motte/secrets.
+func ListNames() ([]string, error) {
+	root, err := config.SecretsDir()
+	if err != nil {
+		return nil, err
+	}
+	return config.ListYAMLNames(root)
 }
 
 // HostEnvVar returns the host env var a resolved secret value travels in.
@@ -168,177 +144,108 @@ func ProbeKeychain(store Store, account string) string {
 	}
 }
 
-// secretScopeDoc is the schema of a scope file: the secrets it holds.
-type secretScopeDoc struct {
-	Secrets map[string]secretEntryDoc `yaml:"secrets"`
-}
-
-// secretEntryDoc is one secret's settings in a scope file.
-type secretEntryDoc struct {
+// secretFileDoc is one secret's settings file schema.
+type secretFileDoc struct {
 	Allow        []string `yaml:"allow"`
-	HeaderFields []string `yaml:"header_fields"`
+	HeaderFields []string `yaml:"header_fields,omitempty"`
 }
 
-// ReadScope strictly decodes one scope file and returns the secrets it
-// holds, keyed by env var name. A missing file holds no secrets.
-func ReadScope(scope config.Scope) (map[string]Spec, error) {
-	path, err := ScopePath(scope)
+// Read strictly decodes one secret's settings file by name. A missing file
+// returns ErrNotFound wrapped.
+func Read(name string) (Spec, error) {
+	path, err := Path(name)
 	if err != nil {
-		return nil, err
+		return Spec{}, err
+	}
+	return ReadFile(path, name)
+}
+
+// ReadFile strictly decodes one secret's settings file at path. A missing file
+// returns ErrNotFound wrapped.
+func ReadFile(path, name string) (Spec, error) {
+	if err := ValidateName(name); err != nil {
+		return Spec{}, fmt.Errorf("invalid secret config %s: %w", path, err)
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return Spec{}, fmt.Errorf("secret %s: %w", name, ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading secret config %s: %w", path, err)
+		return Spec{}, fmt.Errorf("reading secret config %s: %w", path, err)
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	var doc secretScopeDoc
+	var doc secretFileDoc
 	if err := decoder.Decode(&doc); err != nil {
 		if err == io.EOF {
-			return nil, nil
+			return Spec{}, fmt.Errorf(
+				"invalid secret config %s: %s has an empty allow list; at least one host is required",
+				path, name)
 		}
-		return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
+		return Spec{}, fmt.Errorf("invalid secret config %s: %w", path, err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, fmt.Errorf("invalid secret config %s: multiple YAML documents", path)
+		return Spec{}, fmt.Errorf("invalid secret config %s: multiple YAML documents", path)
 	}
-	secrets := make(map[string]Spec, len(doc.Secrets))
-	for envVar, entry := range doc.Secrets {
-		if len(entry.Allow) == 0 {
-			return nil, fmt.Errorf(
-				"invalid secret config %s: %s has an empty allow list; at least one host is required",
-				path, envVar)
-		}
-		for _, host := range entry.Allow {
-			if err := ValidateAllowEntry(host); err != nil {
-				return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
-			}
-		}
-		for _, field := range entry.HeaderFields {
-			if strings.TrimSpace(field) == "" {
-				return nil, fmt.Errorf("invalid secret config %s: %s has an empty header field", path, envVar)
-			}
-		}
-		headerFields := entry.HeaderFields
-		if headerFields == nil {
-			headerFields = DefaultHeaderFields
-		}
-		secrets[envVar] = Spec{
-			Name:         scope.QualifiedName(envVar),
-			EnvVar:       envVar,
-			Allow:        entry.Allow,
-			HeaderFields: headerFields,
+	if len(doc.Allow) == 0 {
+		return Spec{}, fmt.Errorf(
+			"invalid secret config %s: %s has an empty allow list; at least one host is required",
+			path, name)
+	}
+	for _, host := range doc.Allow {
+		if err := ValidateAllowEntry(host); err != nil {
+			return Spec{}, fmt.Errorf("invalid secret config %s: %w", path, err)
 		}
 	}
-	return secrets, nil
+	for _, field := range doc.HeaderFields {
+		if strings.TrimSpace(field) == "" {
+			return Spec{}, fmt.Errorf("invalid secret config %s: %s has an empty header field", path, name)
+		}
+	}
+	headerFields := doc.HeaderFields
+	if headerFields == nil {
+		headerFields = slices.Clone(DefaultHeaderFields)
+	}
+	return Spec{
+		Name:         name,
+		EnvVar:       name,
+		Allow:        doc.Allow,
+		HeaderFields: headerFields,
+	}, nil
 }
 
-// secretScopeNode returns the document of a scope file, with an empty
-// "secrets" mapping when the file does not exist yet.
-func secretScopeNode(path string) (*yaml.Node, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return emptySecretScope(), nil
+// Template returns the commented skeleton of a new secret settings file.
+func Template(name string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
 	}
+	return fmt.Sprintf(`# motte secret — %s
+# Value lives in the OS keychain; set it with `+"`motte secrets set %s`"+`.
+allow:
+  - "api.example.com"
+header_fields:
+  - "authorization"
+`, name, name), nil
+}
+
+// WriteMeta writes one secret's settings file atomically with 0600
+// permissions.
+func WriteMeta(name string, spec Spec) error {
+	path, err := Path(name)
 	if err != nil {
-		return nil, fmt.Errorf("reading secret config %s: %w", path, err)
+		return err
 	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("invalid secret config %s: %w", path, err)
+	headers := spec.HeaderFields
+	if len(headers) == 0 {
+		headers = DefaultHeaderFields
 	}
-	if len(doc.Content) == 0 {
-		return emptySecretScope(), nil
+	doc := secretFileDoc{
+		Allow:        spec.Allow,
+		HeaderFields: headers,
 	}
-	return &doc, nil
-}
-
-// emptySecretScope returns an empty scope document.
-func emptySecretScope() *yaml.Node {
-	return &yaml.Node{
-		Kind: yaml.DocumentNode,
-		Content: []*yaml.Node{
-			{Kind: yaml.MappingNode, Tag: "!!map"},
-		},
-	}
-}
-
-// secretsMapping returns the "secrets" mapping of a scope document. A missing
-// key is appended; a null value (an empty `secrets:`) becomes an empty
-// mapping in place, keeping its comments.
-func secretsMapping(doc *yaml.Node) (*yaml.Node, error) {
-	if len(doc.Content) == 0 {
-		return nil, fmt.Errorf("the secret config has no document")
-	}
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("the secret config is not a mapping")
-	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "secrets" {
-			mapping := root.Content[i+1]
-			switch {
-			case mapping.Kind == yaml.MappingNode:
-				return mapping, nil
-			case mapping.Tag == "!!null":
-				mapping.Kind = yaml.MappingNode
-				mapping.Tag = "!!map"
-				mapping.Value = ""
-				return mapping, nil
-			default:
-				return nil, fmt.Errorf("the secret config's `secrets` is not a mapping")
-			}
-		}
-	}
-	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	root.Content = append(root.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "secrets"},
-		mapping)
-	return mapping, nil
-}
-
-// setSecretEntry adds or replaces one secret in a scope mapping.
-func setSecretEntry(mapping *yaml.Node, envVar string, spec Spec) {
-	value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	allow := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, host := range spec.Allow {
-		allow.Content = append(allow.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: host})
-	}
-	headers := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, field := range spec.HeaderFields {
-		headers.Content = append(headers.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: field})
-	}
-	value.Content = append(value.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "allow"}, allow,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "header_fields"}, headers)
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == envVar {
-			mapping.Content[i+1] = value
-			return
-		}
-	}
-	mapping.Content = append(mapping.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: envVar}, value)
-}
-
-// removeSecretEntry drops one secret from a scope mapping and reports
-// whether it was there.
-func removeSecretEntry(mapping *yaml.Node, envVar string) bool {
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == envVar {
-			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
-			return true
-		}
-	}
-	return false
-}
-
-// writeSecretScope writes a scope document atomically with 0600 permissions.
-func writeSecretScope(path string, doc *yaml.Node) error {
 	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "# motte secret — %s\n", name)
+	fmt.Fprintf(&buf, "# Value lives in the OS keychain; set it with `motte secrets set %s`.\n", name)
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(doc); err != nil {
@@ -347,100 +254,19 @@ func writeSecretScope(path string, doc *yaml.Node) error {
 	if err := encoder.Close(); err != nil {
 		return fmt.Errorf("serializing secret config %s: %w", path, err)
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	return config.WriteAtomic(path, buf.Bytes())
+}
+
+// RemoveMeta deletes a secret's settings file.
+func RemoveMeta(name string) error {
+	path, err := Path(name)
 	if err != nil {
-		return fmt.Errorf("writing secret config %s: %w", path, err)
+		return err
 	}
-	tmpName := tmp.Name()
-	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		cleanup()
-		return fmt.Errorf("setting the mode of %s: %w", path, err)
-	}
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
-		cleanup()
-		return fmt.Errorf("writing secret config %s: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("writing secret config %s: %w", path, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("writing secret config %s: %w", path, err)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing secret config %s: %w", path, err)
 	}
 	return nil
-}
-
-// Template returns the commented skeleton of a new secrets scope file. The
-// project scope of the current directory names the directory it belongs to,
-// so the file identifies its location.
-func Template(scope config.Scope) (string, error) {
-	header, err := scope.TemplateHeader("motte secrets")
-	if err != nil {
-		return "", err
-	}
-	return header + "# Values live in the OS keychain; set one with `motte secrets set <name>`.\n" +
-		"# This file holds the settings only:\n" +
-		"#   allow: the hosts a value may reach (an exact host or a *.wildcard)\n" +
-		"#   header_fields: the headers the value is substituted into\n" +
-		"secrets:\n" +
-		"  # EXAMPLE_API_KEY:\n" +
-		"  #   allow:\n" +
-		"  #     - \"api.example.com\"\n", nil
-}
-
-// WriteMeta adds or replaces one secret in its scope file. The file keeps
-// the comments and the other secrets it holds.
-func WriteMeta(n Name, spec Spec) error {
-	path, err := ScopePath(n.Scope)
-	if err != nil {
-		return err
-	}
-	doc, err := secretScopeNode(path)
-	if err != nil {
-		return err
-	}
-	mapping, err := secretsMapping(doc)
-	if err != nil {
-		return fmt.Errorf("invalid secret config %s: %w", path, err)
-	}
-	setSecretEntry(mapping, n.Leaf, spec)
-	return writeSecretScope(path, doc)
-}
-
-// RemoveMeta deletes one secret from its scope file and removes the file
-// when it holds no secret anymore.
-func RemoveMeta(n Name) error {
-	path, err := ScopePath(n.Scope)
-	if err != nil {
-		return err
-	}
-	doc, err := secretScopeNode(path)
-	if err != nil {
-		return err
-	}
-	mapping, err := secretsMapping(doc)
-	if err != nil {
-		return fmt.Errorf("invalid secret config %s: %w", path, err)
-	}
-	if !removeSecretEntry(mapping, n.Leaf) {
-		return nil
-	}
-	if len(mapping.Content) == 0 {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("removing secret config %s: %w", path, err)
-		}
-		return nil
-	}
-	return writeSecretScope(path, doc)
 }
 
 // ValidateAllowEntry checks one secret allow host: an exact host, a
@@ -451,7 +277,7 @@ func ValidateAllowEntry(entry string) error {
 		return nil
 	}
 	if rest, ok := strings.CutPrefix(entry, "*."); ok {
-		if rest == "" || strings.ContainsAny(rest, " :/\\*") {
+		if rest == "" || strings.ContainsAny(rest, " :/\\*") || !strings.Contains(rest, ".") {
 			return fmt.Errorf("invalid secret allow host %q", entry)
 		}
 		return nil
@@ -460,68 +286,6 @@ func ValidateAllowEntry(entry string) error {
 		return fmt.Errorf("invalid secret allow host %q; expected an exact host, a *.suffix wildcard, or *", entry)
 	}
 	return nil
-}
-
-// ScanEffective returns the effective secret set for a profile launch:
-// global secrets plus the profile's own and this directory's project secrets,
-// with project > profile > global precedence, deduplicated by env var name.
-func ScanEffective(profileName string) ([]Spec, error) {
-	scopes, err := config.EffectiveScopes(profileName)
-	if err != nil {
-		return nil, err
-	}
-	var effective []Spec
-	winner := map[string]int{} // env var -> index of the winning secret so far
-	for _, scope := range scopes {
-		secrets, err := ReadScope(scope)
-		if err != nil {
-			return nil, err
-		}
-		for _, envVar := range SortedNames(secrets) {
-			spec := secrets[envVar]
-			if idx, ok := winner[spec.EnvVar]; ok {
-				slog.Warn("secret is shadowed by a more specific scope",
-					"secret", effective[idx].Name, "winner", spec.Name)
-				effective[idx] = spec
-				continue
-			}
-			winner[spec.EnvVar] = len(effective)
-			effective = append(effective, spec)
-		}
-	}
-	return effective, nil
-}
-
-// SortedNames returns the env var names of a scope in a stable order.
-func SortedNames(secrets map[string]Spec) []string {
-	names := make([]string, 0, len(secrets))
-	for name := range secrets {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// CountAll returns how many secrets are configured under any scope; used
-// for the first-run hint.
-func CountAll() (int, error) {
-	root, err := config.SecretsDir()
-	if err != nil {
-		return 0, err
-	}
-	scopes, err := config.LsScopes(root)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, scope := range scopes {
-		secrets, err := ReadScope(scope)
-		if err != nil {
-			return 0, err
-		}
-		count += len(secrets)
-	}
-	return count, nil
 }
 
 // Stored is one secret as recorded in a durable sandbox config.
@@ -649,15 +413,19 @@ func (h *hostPatternValue) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("host pattern: %w", err)
 	}
 	if value, ok := fields["wildcard"]; ok {
-		if str, ok := value.(string); ok {
-			h.pattern = str
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("host pattern: wildcard must be a string")
 		}
+		h.pattern = str
 		return nil
 	}
 	if value, ok := fields["exact"]; ok {
-		if str, ok := value.(string); ok {
-			h.pattern = str
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("host pattern: exact must be a string")
 		}
+		h.pattern = str
 		return nil
 	}
 	_, any := fields["any"]
