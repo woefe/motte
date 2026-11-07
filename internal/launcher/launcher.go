@@ -1,6 +1,4 @@
-// The launcher: motte's boot flow. It reads this directory's project config,
-// merges the selected policy groups and the project's allow entries into one
-// allow list, mounts the user's OpenCode config, resolves the keychain secrets,
+// The launcher: motte's boot flow. It resolves this directory's project,
 // creates or reuses this directory's sandbox via the microsandbox Go SDK,
 // converges the sandbox's secrets onto the desired set, and attaches the
 // terminal to the workload.
@@ -8,43 +6,30 @@ package launcher
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
+	"slices"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
-	"github.com/woefe/motte/internal/config"
-	"github.com/woefe/motte/internal/policies"
 	"github.com/woefe/motte/internal/project"
-	"github.com/woefe/motte/internal/secrets"
 )
+
+// labelKey is the sandbox label that carries the sandbox config fingerprint
+// (image and effective network policy), so a reused VM can be told that its
+// config changed.
+const labelKey = "motte.policy"
 
 // Boot launches this directory's project sandbox and returns the workload's
 // exit code.
 func Boot(noPull, replace bool) (int, error) {
-	proj, projectPath, err := loadProject()
+	resolved, err := project.ResolveCurrent()
 	if err != nil {
 		return 1, err
 	}
-	allow, err := EffectiveAllow(proj, projectPath)
-	if err != nil {
-		return 1, err
-	}
+	defer resolved.ClearSecretEnv()
 
-	// Resolve the project's selected secrets from the OS keychain and feed
-	// them to the runtime via host env vars; the env vars are cleared once the
-	// sandbox has booted.
-	resolved, err := resolveSecrets(proj.Secrets, secrets.DefaultStore())
-	if err != nil {
-		return 1, err
-	}
-	defer unsetSecretEnv(resolved)
-
-	opts, err := sandboxOptions(proj.Image, allow, noPull)
-	if err != nil {
-		return 1, err
-	}
+	opts := sandboxOptions(resolved, noPull)
 
 	ctx := context.Background()
 
@@ -54,14 +39,10 @@ func Boot(noPull, replace bool) (int, error) {
 		return 1, fmt.Errorf("ensuring the microsandbox runtime: %w", err)
 	}
 
-	name, err := sandboxName()
-	if err != nil {
-		return 1, err
-	}
-	fingerprint := policies.Fingerprint(proj.Image, allow)
-	state := launchState{secrets: resolved, policyFingerprint: fingerprint}
+	name := resolved.SandboxName
+	state := launchState{secrets: resolved.Secrets, policyFingerprint: resolved.Fingerprint}
 	sandbox, err := openSandbox(ctx, name, opts, replace, state)
-	unsetSecretEnv(resolved)
+	resolved.ClearSecretEnv()
 	if err != nil {
 		return 1, err
 	}
@@ -84,57 +65,10 @@ func Boot(noPull, replace bool) (int, error) {
 	return code, nil
 }
 
-// loadProject reads the current directory's project config, or fails with a
-// hint to run `motte init` when none exists yet.
-func loadProject() (project.Config, string, error) {
-	proj, path, err := project.ReadCurrent()
-	if errors.Is(err, project.ErrNotFound) {
-		return project.Config{}, path, fmt.Errorf(
-			"no project configured for this directory (%s); run `motte init` first",
-			path,
-		)
-	}
-	if err != nil {
-		return project.Config{}, path, err
-	}
-	return proj, path, nil
-}
-
-// EffectiveAllow computes the deduplicated egress allow list for a project
-// config: every selected policy group plus the project's network.allow entries.
-// A selected group without a file fails with projectPath in the error.
-func EffectiveAllow(proj project.Config, projectPath string) ([]string, error) {
-	var allow []string
-	for _, group := range proj.AllowGroups {
-		entries, err := policies.ReadGroup(group)
-		if errors.Is(err, policies.ErrGroupNotFound) {
-			return nil, fmt.Errorf(
-				"project config %s: policy group %q does not exist; create it with `motte policies configure %s`",
-				projectPath, group, group,
-			)
-		}
-		if err != nil {
-			return nil, err
-		}
-		allow = policies.ExtendAllow(allow, entries)
-	}
-	allow = policies.ExtendAllow(allow, proj.Allow)
-	return allow, nil
-}
-
-// sandboxName returns the msb VM name for this directory: `motte-<dir-hash>`.
-func sandboxName() (string, error) {
-	hash, err := config.DirHash()
-	if err != nil {
-		return "", err
-	}
-	return "motte-" + hash, nil
-}
-
 // launchState is the desired state of a launch: the resolved secrets and the
 // fingerprint of the image and effective network policy.
 type launchState struct {
-	secrets           []secrets.Spec
+	secrets           []project.ResolvedSecret
 	policyFingerprint string
 }
 
@@ -203,7 +137,7 @@ type secretModder interface {
 // convergeAfterCreate applies secrets to a freshly created sandbox. The VM
 // booted without them, so the restart policy reboots it with the secrets in
 // place. The stored config of a fresh sandbox carries no secrets yet.
-func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, desired []secrets.Spec) error {
+func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, desired []project.ResolvedSecret) error {
 	if len(desired) == 0 {
 		return nil
 	}
@@ -219,7 +153,7 @@ func convergeAfterCreate(ctx context.Context, sandbox *m.Sandbox, desired []secr
 // and fixes drift: a stopped VM gets the persisted patch applied for its next
 // start; a running VM gets a note instead (its restart is left to the user).
 func convergeOnReuse(ctx context.Context, name string, handle *m.SandboxHandle, state launchState) error {
-	stored, err := secrets.ParseStored(handle.ConfigJSON())
+	stored, err := parseStoredSecrets(handle.ConfigJSON())
 	if err != nil {
 		return fmt.Errorf("sandbox %s: %w", name, err)
 	}
@@ -247,7 +181,7 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 	if err != nil || config.Labels == nil {
 		return
 	}
-	stored, ok := config.Labels[policies.LabelKey]
+	stored, ok := config.Labels[labelKey]
 	if !ok || stored == fingerprint {
 		return
 	}
@@ -258,10 +192,10 @@ func reportPolicyDrift(handle *m.SandboxHandle, fingerprint string) {
 
 // modifySecrets builds and applies the convergence patch from the drift
 // between stored and desired secrets; it is a no-op without drift.
-func modifySecrets(ctx context.Context, modder secretModder, name string, stored []secrets.Stored,
-	desired []secrets.Spec, policy m.ModificationPolicy,
+func modifySecrets(ctx context.Context, modder secretModder, name string, stored []storedSecret,
+	desired []project.ResolvedSecret, policy m.ModificationPolicy,
 ) (*m.SandboxModificationPlan, error) {
-	upsert, remove, migrated := secrets.Drift(stored, desired)
+	upsert, remove, migrated := secretDrift(stored, desired)
 	if len(upsert) == 0 && len(remove) == 0 {
 		return nil, nil
 	}
@@ -285,57 +219,6 @@ func reportModifications(plan *m.SandboxModificationPlan, name string) {
 		return
 	}
 	slog.Info("sandbox reboots to apply secret changes", "name", name, "changes", len(plan.Changes))
-}
-
-// resolveSecrets loads the settings and keychain values of the selected secret
-// names into host env vars for the sandbox boot. Secret allow hosts do not
-// widen the network egress allow list.
-func resolveSecrets(selected []string, store secrets.Store) ([]secrets.Spec, error) {
-	var resolved []secrets.Spec
-	seen := make(map[string]bool, len(selected))
-	for _, name := range selected {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		spec, err := secrets.Read(name)
-		if errors.Is(err, secrets.ErrNotFound) {
-			unsetSecretEnv(resolved)
-			return nil, fmt.Errorf(
-				"secret %s is not configured — create it with: motte secrets add",
-				name,
-			)
-		}
-		if err != nil {
-			unsetSecretEnv(resolved)
-			return nil, err
-		}
-		value, err := store.Get(spec.Name)
-		if errors.Is(err, secrets.ErrNotFound) {
-			unsetSecretEnv(resolved)
-			return nil, fmt.Errorf(
-				"secret %s is not in the keychain — set it with: motte secrets set %s",
-				spec.Name, spec.Name,
-			)
-		}
-		if err != nil {
-			unsetSecretEnv(resolved)
-			return nil, err
-		}
-		if err := os.Setenv(secrets.HostEnvVar(spec.EnvVar), value); err != nil {
-			unsetSecretEnv(resolved)
-			return nil, fmt.Errorf("exporting %s: %w", secrets.HostEnvVar(spec.EnvVar), err)
-		}
-		resolved = append(resolved, spec)
-	}
-	return resolved, nil
-}
-
-// unsetSecretEnv clears the host env vars secrets resolve through.
-func unsetSecretEnv(specs []secrets.Spec) {
-	for _, secret := range specs {
-		_ = os.Unsetenv(secrets.HostEnvVar(secret.EnvVar))
-	}
 }
 
 // createSandbox boots a new sandbox, logging creation progress.
@@ -370,4 +253,194 @@ func logCreationProgress(events <-chan m.CreationProgress) <-chan struct{} {
 		}
 	}()
 	return done
+}
+
+// --- durable sandbox secret parsing and drift -------------------------------
+
+// storedSecret is one secret as recorded in a durable sandbox config.
+type storedSecret struct {
+	EnvVar       string
+	Value        string
+	Allow        []string
+	HeaderFields []string
+}
+
+// parseStoredSecrets extracts the secrets of a stored sandbox config JSON,
+// tolerating the durable shapes runtimes have written: secrets as an array or
+// a map, hosts as HostPattern objects or strings, and `injection` as the
+// older spelling of `substitution`.
+func parseStoredSecrets(configJSON string) ([]storedSecret, error) {
+	if configJSON == "" {
+		return nil, nil
+	}
+	var config struct {
+		Network *struct {
+			Secrets *struct {
+				Secrets json.RawMessage `json:"secrets"`
+			} `json:"secrets"`
+		} `json:"network"`
+	}
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		return nil, fmt.Errorf("parsing sandbox config: %w", err)
+	}
+	if config.Network == nil || config.Network.Secrets == nil || len(config.Network.Secrets.Secrets) == 0 {
+		return nil, nil
+	}
+	var docs []storedSecretJSON
+	if err := json.Unmarshal(config.Network.Secrets.Secrets, &docs); err != nil {
+		// A map keyed by name; fold the keys into the env var slot.
+		keyed := map[string]storedSecretJSON{}
+		if err := json.Unmarshal(config.Network.Secrets.Secrets, &keyed); err != nil {
+			return nil, fmt.Errorf("parsing sandbox config secrets: %w", err)
+		}
+		for key, doc := range keyed {
+			doc.EnvVar = firstNonEmpty(doc.EnvVar, key)
+			docs = append(docs, doc)
+		}
+	}
+	var entries []storedSecret
+	for _, doc := range docs {
+		entries = append(entries, doc.toStoredSecret())
+	}
+	return entries, nil
+}
+
+// firstNonEmpty returns the first non-empty string.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// storedSecretJSON mirrors the durable SecretEntry serde shape.
+type storedSecretJSON struct {
+	Name    string             `json:"name"`
+	EnvVar  string             `json:"env_var"`
+	Value   string             `json:"value"`
+	Allowed []hostPatternValue `json:"allowed_hosts"`
+	Allow   []hostPatternValue `json:"allow"`
+	Sub     *storedSubJSON     `json:"substitution"`
+	Inject  *storedSubJSON     `json:"injection"`
+}
+
+func (s storedSecretJSON) toStoredSecret() storedSecret {
+	sub := s.Sub
+	if sub == nil {
+		sub = s.Inject
+	}
+	var headers []string
+	if sub != nil {
+		headers = sub.HeaderFields
+	}
+	return storedSecret{
+		EnvVar:       firstNonEmpty(s.EnvVar, s.Name),
+		Value:        s.Value,
+		Allow:        hostPatternStrings(s.Allowed, s.Allow),
+		HeaderFields: headers,
+	}
+}
+
+// hostPatternStrings joins two field aliases, taking the first non-empty.
+func hostPatternStrings(groups ...[]hostPatternValue) []string {
+	for _, group := range groups {
+		if len(group) > 0 {
+			var out []string
+			for _, p := range group {
+				out = append(out, p.pattern)
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// storedSubJSON is the substitution (or injection) sub-document.
+type storedSubJSON struct {
+	HeaderFields []string `json:"header_fields"`
+}
+
+// hostPatternValue accepts the shapes `HostPattern` serializes to: a string
+// ("any", an exact host, or a "*.suffix") or an externally tagged object
+// ({"exact":h}, {"wildcard":h}, {"any":null}).
+type hostPatternValue struct {
+	pattern string
+}
+
+func (h *hostPatternValue) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		h.pattern = str
+		return nil
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("host pattern: %w", err)
+	}
+	if value, ok := fields["wildcard"]; ok {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("host pattern: wildcard must be a string")
+		}
+		h.pattern = str
+		return nil
+	}
+	if value, ok := fields["exact"]; ok {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("host pattern: exact must be a string")
+		}
+		h.pattern = str
+		return nil
+	}
+	_, any := fields["any"]
+	if len(fields) == 0 || (any && len(fields) == 1) {
+		h.pattern = "*"
+		return nil
+	}
+	return fmt.Errorf("host pattern: unknown shape %s", string(data))
+}
+
+// secretDrift compares the secrets stored in a sandbox config against the
+// desired set (both keyed by env var name). It returns the desired secrets to
+// upsert, stored secrets to remove, and the upserts that replace a stored raw
+// (plaintext) value with a keychain-backed env reference.
+func secretDrift(
+	stored []storedSecret,
+	desired []project.ResolvedSecret,
+) (upsert []project.ResolvedSecret, remove, migrated []string) {
+	want := make(map[string]project.ResolvedSecret, len(desired))
+	for _, spec := range desired {
+		want[spec.EnvVar] = spec
+	}
+	have := make(map[string]bool, len(stored))
+	for _, s := range stored {
+		if s.EnvVar == "" {
+			continue
+		}
+		have[s.EnvVar] = true
+		desired, ok := want[s.EnvVar]
+		if !ok {
+			remove = append(remove, s.EnvVar)
+			continue
+		}
+		if s.Value != "" {
+			// A plaintext value from an older motte build: replace it with
+			// the keychain-backed env reference.
+			upsert = append(upsert, desired)
+			migrated = append(migrated, s.EnvVar)
+			continue
+		}
+		if !slices.Equal(s.Allow, desired.Allow) || !slices.Equal(s.HeaderFields, desired.HeaderFields) {
+			upsert = append(upsert, desired)
+		}
+	}
+	for _, spec := range desired {
+		if !have[spec.EnvVar] {
+			upsert = append(upsert, spec)
+		}
+	}
+	return upsert, remove, migrated
 }

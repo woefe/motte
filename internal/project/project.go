@@ -1,6 +1,6 @@
 // Per-directory project configs: one file per directory under
-// ~/.config/motte/projects/<dir-hash>.yaml, plus the built-in image presets and
-// repository toolchain detection used by `motte init`.
+// ~/.config/motte/projects/<dir-hash>.yaml, plus the built-in image presets,
+// repository toolchain detection, and launch-time project resolution.
 //
 // Each project config holds the full image reference, optional extra egress
 // entries (`network.allow`) and user policy groups (`network.allowGroups`),
@@ -9,6 +9,8 @@ package project
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	m "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/policies"
 	"github.com/woefe/motte/internal/secrets"
@@ -87,6 +90,34 @@ type Config struct {
 	Allow       []string
 	AllowGroups []string
 	Secrets     []string
+}
+
+// ResolvedSecret is one secret resolved for a sandbox launch: its env var name,
+// the host env var its value travels in, its allowed hosts, and its header
+// fields.
+type ResolvedSecret struct {
+	EnvVar       string
+	HostEnv      string
+	Allow        []string
+	HeaderFields []string
+}
+
+// Resolved holds everything the launcher needs to boot the current directory's
+// project sandbox.
+type Resolved struct {
+	SandboxName  string
+	Image        string
+	WorkspaceDir string
+	OpencodeDir  string
+	Rules        []m.PolicyRule
+	Fingerprint  string
+	Secrets      []ResolvedSecret
+}
+
+// ClearSecretEnv unsets the host environment variables exported for the
+// resolved secrets.
+func (r Resolved) ClearSecretEnv() {
+	unsetSecretEnv(r.Secrets)
 }
 
 // projectFileDoc mirrors the project config YAML schema.
@@ -241,4 +272,165 @@ func WriteFile(path, projectDir string, cfg Config) error {
 		return fmt.Errorf("serializing project config %s: %w", path, err)
 	}
 	return config.WriteAtomic(path, buf.Bytes())
+}
+
+// EffectiveAllow computes the deduplicated egress allow list for a project
+// config: every selected policy group plus the project's network.allow entries.
+// A selected group without a file fails with projectPath in the error.
+func EffectiveAllow(proj Config, projectPath string) ([]string, error) {
+	var allow []string
+	for _, group := range proj.AllowGroups {
+		entries, err := policies.ReadGroup(group)
+		if errors.Is(err, policies.ErrGroupNotFound) {
+			return nil, fmt.Errorf(
+				"project config %s: policy group %q does not exist; create it with `motte policies configure %s`",
+				projectPath, group, group,
+			)
+		}
+		if err != nil {
+			return nil, err
+		}
+		allow = policies.ExtendAllow(allow, entries)
+	}
+	allow = policies.ExtendAllow(allow, proj.Allow)
+	return allow, nil
+}
+
+// ParseRules translates an allow list in the CLI rule grammar into SDK egress
+// allow rules.
+func ParseRules(allow []string) ([]m.PolicyRule, error) {
+	rules := make([]m.PolicyRule, 0, len(allow))
+	for _, entry := range allow {
+		rule, err := policies.ParseAllowRule(entry)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
+
+// Fingerprint returns a short digest of the sandbox's image and effective
+// network allow list. It rides along in a sandbox label, so a reused VM can be
+// told that the image or policy it was created with is no longer current.
+func Fingerprint(image string, allow []string) string {
+	digest := sha256.New()
+	_, _ = fmt.Fprintf(digest, "image=%s\n", image)
+	for _, entry := range allow {
+		_, _ = fmt.Fprintf(digest, "%s\n", entry)
+	}
+	return hex.EncodeToString(digest.Sum(nil)[:8])
+}
+
+// ResolveCurrent loads and resolves the current directory's project for a
+// sandbox launch, exporting selected secrets from the default OS keychain into
+// host env vars. The caller must call Resolved.ClearSecretEnv() once the
+// sandbox has booted.
+func ResolveCurrent() (Resolved, error) {
+	return resolveCurrentWithStore(secrets.DefaultStore())
+}
+
+// resolveCurrentWithStore resolves the current directory's project against
+// store.
+func resolveCurrentWithStore(store secrets.Store) (Resolved, error) {
+	proj, projectPath, err := ReadCurrent()
+	if errors.Is(err, ErrNotFound) {
+		return Resolved{}, fmt.Errorf(
+			"no project configured for this directory (%s); run `motte init` first",
+			projectPath,
+		)
+	}
+	if err != nil {
+		return Resolved{}, err
+	}
+	allow, err := EffectiveAllow(proj, projectPath)
+	if err != nil {
+		return Resolved{}, err
+	}
+	rules, err := ParseRules(allow)
+	if err != nil {
+		return Resolved{}, err
+	}
+	workspaceDir, err := config.ProjectPath()
+	if err != nil {
+		return Resolved{}, err
+	}
+	hash, err := config.DirHash()
+	if err != nil {
+		return Resolved{}, err
+	}
+	opencodeDir, err := config.EnsureOpencodeConfig()
+	if err != nil {
+		return Resolved{}, err
+	}
+	resolvedSecrets, err := resolveSecrets(proj.Secrets, store)
+	if err != nil {
+		return Resolved{}, err
+	}
+	return Resolved{
+		SandboxName:  "motte-" + hash,
+		Image:        proj.Image,
+		WorkspaceDir: workspaceDir,
+		OpencodeDir:  opencodeDir,
+		Rules:        rules,
+		Fingerprint:  Fingerprint(proj.Image, allow),
+		Secrets:      resolvedSecrets,
+	}, nil
+}
+
+// resolveSecrets loads the settings and keychain values of the selected secret
+// names into host env vars for the sandbox boot. Secret allow hosts do not
+// widen the network egress allow list.
+func resolveSecrets(selected []string, store secrets.Store) ([]ResolvedSecret, error) {
+	var resolved []ResolvedSecret
+	seen := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		spec, err := secrets.Read(name)
+		if errors.Is(err, secrets.ErrNotFound) {
+			unsetSecretEnv(resolved)
+			return nil, fmt.Errorf(
+				"secret %s is not configured — create it with: motte secrets add",
+				name,
+			)
+		}
+		if err != nil {
+			unsetSecretEnv(resolved)
+			return nil, err
+		}
+		value, err := store.Get(spec.Name)
+		if errors.Is(err, secrets.ErrNotFound) {
+			unsetSecretEnv(resolved)
+			return nil, fmt.Errorf(
+				"secret %s is not in the keychain — set it with: motte secrets set %s",
+				spec.Name, spec.Name,
+			)
+		}
+		if err != nil {
+			unsetSecretEnv(resolved)
+			return nil, err
+		}
+		hostEnv := secrets.HostEnvVar(spec.EnvVar)
+		if err := os.Setenv(hostEnv, value); err != nil {
+			unsetSecretEnv(resolved)
+			return nil, fmt.Errorf("exporting %s: %w", hostEnv, err)
+		}
+		resolved = append(resolved, ResolvedSecret{
+			EnvVar:       spec.EnvVar,
+			HostEnv:      hostEnv,
+			Allow:        spec.Allow,
+			HeaderFields: spec.HeaderFields,
+		})
+	}
+	return resolved, nil
+}
+
+// unsetSecretEnv clears the host env vars secrets resolve through.
+func unsetSecretEnv(resolved []ResolvedSecret) {
+	for _, sec := range resolved {
+		_ = os.Unsetenv(sec.HostEnv)
+	}
 }

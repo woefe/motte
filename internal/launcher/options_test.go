@@ -1,16 +1,12 @@
 package launcher
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
-	motteconfig "github.com/woefe/motte/internal/config"
-	"github.com/woefe/motte/internal/policies"
-	"github.com/woefe/motte/internal/secrets"
+	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/testutil"
 )
 
@@ -40,23 +36,12 @@ func applyOptions(opts []m.SandboxOption) m.SandboxConfig {
 	return config
 }
 
-// workingDir returns the test process's resolved working directory: the base
-// the launcher resolves the /workspace mount source to.
-func workingDir(t *testing.T) string {
-	t.Helper()
-	wd, err := motteconfig.ProjectPath()
-	if err != nil {
-		t.Fatalf("ProjectPath: %v", err)
-	}
-	return wd
-}
-
 func TestNetworkConfig(t *testing.T) {
-	allowList := []string{"dns", "*.github.com"}
-	config, err := networkConfig(allowList)
+	rules, err := project.ParseRules([]string{"dns", "*.github.com"})
 	if err != nil {
-		t.Fatalf("networkConfig: %v", err)
+		t.Fatalf("ParseRules: %v", err)
 	}
+	config := networkConfig(rules)
 	if config.DefaultEgress != m.PolicyActionDeny || config.DefaultIngress != m.PolicyActionAllow {
 		t.Errorf("defaults = %v/%v, want deny/allow", config.DefaultEgress, config.DefaultIngress)
 	}
@@ -73,13 +58,21 @@ func TestNetworkConfig(t *testing.T) {
 }
 
 func TestSandboxOptions(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
 	image := testutil.BuiltinImages()["base"]
 	allow := []string{"dns", "*.github.com", "*.opencode.ai"}
-	opts, err := sandboxOptions(image, allow, false)
+	rules, err := project.ParseRules(allow)
 	if err != nil {
-		t.Fatalf("sandboxOptions: %v", err)
+		t.Fatalf("ParseRules: %v", err)
 	}
+	resolved := project.Resolved{
+		SandboxName:  "motte-1234567890ab",
+		Image:        image,
+		WorkspaceDir: "/host/workspace",
+		OpencodeDir:  "/host/opencode",
+		Rules:        rules,
+		Fingerprint:  project.Fingerprint(image, allow),
+	}
+	opts := sandboxOptions(resolved, false)
 	config := applyOptions(opts)
 
 	if config.Image != image {
@@ -112,27 +105,20 @@ func TestSandboxOptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("Volumes = %+v, want a /workspace mount", config.Volumes)
 	}
-	if mount.Kind() != m.MountKindBind || mount.Bind != workingDir(t) {
-		t.Errorf("mount = %+v (bind %q), want a bind of the working directory", mount, mount.Bind)
+	if mount.Kind() != m.MountKindBind || mount.Bind != "/host/workspace" {
+		t.Errorf("mount = %+v (bind %q), want a bind of /host/workspace", mount, mount.Bind)
 	}
 	if mount.Readonly {
 		t.Error("mount is readonly, want rw")
 	}
 
-	opencodeDir, err := motteconfig.OpencodeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
 	opencode, ok := config.Volumes["/etc/opencode"]
 	if !ok {
 		t.Fatalf("Volumes = %+v, want an /etc/opencode mount", config.Volumes)
 	}
-	if opencode.Kind() != m.MountKindBind || opencode.Bind != opencodeDir || !opencode.Readonly {
-		t.Errorf("opencode mount = %+v (bind %q), want a readonly bind of %q",
-			opencode, opencode.Bind, opencodeDir)
-	}
-	if _, err := os.Stat(filepath.Join(opencodeDir, "opencode.json")); err != nil {
-		t.Errorf("default opencode.json: %v", err)
+	if opencode.Kind() != m.MountKindBind || opencode.Bind != "/host/opencode" || !opencode.Readonly {
+		t.Errorf("opencode mount = %+v (bind %q), want a readonly bind of /host/opencode",
+			opencode, opencode.Bind)
 	}
 
 	if config.Network == nil || config.Network.DefaultEgress != m.PolicyActionDeny {
@@ -154,8 +140,8 @@ func TestSandboxOptions(t *testing.T) {
 	}
 	// The fingerprint of the image and effective policy rides in the labels,
 	// so a reused VM can be told that its config changed.
-	if got := config.Labels[policies.LabelKey]; got != policies.Fingerprint(image, allow) {
-		t.Errorf("label %q = %q, want %q", policies.LabelKey, got, policies.Fingerprint(image, allow))
+	if got := config.Labels[labelKey]; got != resolved.Fingerprint {
+		t.Errorf("label %q = %q, want %q", labelKey, got, resolved.Fingerprint)
 	}
 
 	// Secrets are never part of create options: values would persist
@@ -167,11 +153,7 @@ func TestSandboxOptions(t *testing.T) {
 }
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	opts, err := sandboxOptions(testutil.BuiltinImages()["golang"], nil, true)
-	if err != nil {
-		t.Fatalf("sandboxOptions: %v", err)
-	}
+	opts := sandboxOptions(project.Resolved{Image: testutil.BuiltinImages()["golang"]}, true)
 	if got := applyOptions(opts).PullPolicy; got != m.PullPolicyDefault {
 		t.Errorf("PullPolicy = %q, want the default (pull if missing)", got)
 	}
@@ -179,8 +161,13 @@ func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
 
 // TestSecretModifySpecs builds modify entries with env references only.
 func TestSecretModifySpecs(t *testing.T) {
-	specs := secretModifySpecs([]secrets.Spec{
-		{EnvVar: "a_key", Allow: []string{"a.example.com"}, HeaderFields: []string{"authorization"}},
+	specs := secretModifySpecs([]project.ResolvedSecret{
+		{
+			EnvVar:       "a_key",
+			HostEnv:      "MOTTE_SECRET_a_key",
+			Allow:        []string{"a.example.com"},
+			HeaderFields: []string{"authorization"},
+		},
 	})
 	spec, ok := specs["a_key"]
 	if !ok {
