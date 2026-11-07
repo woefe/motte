@@ -19,9 +19,9 @@ Motte provides isolated development environments for agentic development using O
   - `motte secrets <add|set|configure|rm|ls>` manages keychain-backed secrets
 - `cmd/motte` is the thin binary entrypoint; all Go code lives under `internal/`
 - `internal/cli` builds the cobra command tree and carries the command implementations (prompts, ls formatting, exit semantics)
-- `internal/launcher` is the boot flow: it merges the base policy, the selected groups, and the project entries into one allow list, resolves the keychain secrets, and drives the microsandbox Go SDK
+- `internal/launcher` is the boot flow: it merges the selected policy groups and the project entries into one allow list, resolves the keychain secrets, and drives the microsandbox Go SDK
 - `internal/project` owns the per-directory project config files, the built-in image presets, and repository toolchain detection
-- `internal/policies` owns the always-on base policy, the user policy group files, and the network rule grammar
+- `internal/policies` owns the user policy group files and the network rule grammar
 - `internal/secrets` owns the per-secret settings files and the keychain-backed values
 - `internal/config` owns the config tree paths under `$XDG_CONFIG_HOME/motte` and the shared editor configure flow
 - user config lives in one file per entity: `projects/<dir-hash>.yaml`, `policies/<group>.yaml`, `secrets/<NAME>.yaml`

@@ -2,6 +2,7 @@ package policies
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -9,21 +10,15 @@ import (
 	"github.com/woefe/motte/internal/testutil"
 )
 
-// TestBaseAllowAndExtend checks that BaseAllow is unique and contains the core
-// rules, and that ExtendAllow deduplicates entries.
-func TestBaseAllowAndExtend(t *testing.T) {
-	base := BaseAllow()
-	testutil.AssertAllowListed(t, base, "dns", "*.github.com", "*.opencode.ai", "pypi.org")
-	testutil.AssertAllowUnique(t, base)
-	for _, entry := range base {
-		if _, err := ParseAllowRule(entry); err != nil {
-			t.Errorf("base entry %q failed ParseAllowRule: %v", entry, err)
-		}
-	}
-	extended := ExtendAllow(base, []string{"*.github.com", "extra.example.com"})
+// TestExtendAllow checks that ExtendAllow deduplicates entries while preserving
+// order.
+func TestExtendAllow(t *testing.T) {
+	initial := []string{"dns", "*.github.com"}
+	extended := ExtendAllow(initial, []string{"*.github.com", "extra.example.com"})
 	testutil.AssertAllowUnique(t, extended)
-	if len(extended) != len(base)+1 || extended[len(extended)-1] != "extra.example.com" {
-		t.Errorf("extended = %v, want extra.example.com appended once", extended)
+	want := []string{"dns", "*.github.com", "extra.example.com"}
+	if !slices.Equal(extended, want) {
+		t.Errorf("extended = %v, want %v", extended, want)
 	}
 }
 
@@ -71,13 +66,13 @@ func TestTemplateAndReadGroup(t *testing.T) {
 // TestFingerprintIncludesImageAndPolicy checks that changing either image or
 // network policy changes the fingerprint.
 func TestFingerprintIncludesImageAndPolicy(t *testing.T) {
-	base := BaseAllow()
-	fp1 := Fingerprint("ghcr.io/woefe/motte/base:latest", base)
-	fp2 := Fingerprint("ghcr.io/woefe/motte/golang:latest", base)
+	allow := []string{"dns", "*.github.com"}
+	fp1 := Fingerprint("ghcr.io/woefe/motte/base:latest", allow)
+	fp2 := Fingerprint("ghcr.io/woefe/motte/golang:latest", allow)
 	if fp1 == fp2 {
 		t.Error("Fingerprint did not change when image changed")
 	}
-	fp3 := Fingerprint("ghcr.io/woefe/motte/base:latest", ExtendAllow(base, []string{"extra.example.com"}))
+	fp3 := Fingerprint("ghcr.io/woefe/motte/base:latest", ExtendAllow(allow, []string{"extra.example.com"}))
 	if fp1 == fp3 {
 		t.Error("Fingerprint did not change when allow list changed")
 	}

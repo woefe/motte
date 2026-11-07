@@ -1,9 +1,8 @@
-// Network policies: the always-on base egress allow list and user policy
-// groups (`~/.config/motte/policies/<group>.yaml`).
+// User policy groups: one file per group under ~/.config/motte/policies.
 //
 // Each group file (`<group>.yaml`) defines an `allow` list in the microsandbox
 // CLI rule grammar (`TARGET[:PROTO[:PORTS]]`). Selected policy groups and
-// project entries widen the always-on base egress policy; they never trim it.
+// project entries form the project's egress allow list.
 package policies
 
 import (
@@ -29,34 +28,6 @@ const LabelKey = "motte.policy"
 
 // ErrGroupNotFound reports a missing policy group file.
 var ErrGroupNotFound = errors.New("policy group not found")
-
-// baseAllow is the always-on egress policy every project starts with.
-var baseAllow = []string{
-	"dns",
-	"*.github.com",
-	"*.githubusercontent.com",
-	"*.opencode.ai",
-	// mirrors configured in docker/base/pacman-mirrorlist
-	"fastly.mirror.pkgbuild.com",
-	"geo.mirror.pkgbuild.com",
-	// default opencode websearch providers
-	"mcp.exa.ai",
-	"mcp.firecrawl.dev",
-	"search.parallel.ai",
-	"api.tavily.com",
-	"agent.tinyfish.ai",
-	// mise and sigstore for version and attestation lookups
-	"mise-versions.jdx.dev",
-	"tuf-repo-cdn.sigstore.dev",
-	// python for mise pypi backend, which is part of the base image
-	"pypi.org",
-	"files.pythonhosted.org",
-}
-
-// BaseAllow returns a copy of the always-on base egress policy.
-func BaseAllow() []string {
-	return slices.Clone(baseAllow)
-}
 
 // ExtendAllow appends entries to allow, skipping ones already present.
 func ExtendAllow(allow, entries []string) []string {
@@ -165,7 +136,7 @@ func Template(group string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(`# motte policy group — %s
-# Entries extend the base egress policy when selected by a project.
+# Entries are added to a project's egress allow list when selected by a project.
 # Every entry uses the microsandbox CLI rule grammar, TARGET[:PROTO[:PORTS]]:
 #   - "*.example.com"
 #   - "host:tcp:9931"

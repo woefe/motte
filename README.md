@@ -63,7 +63,7 @@ msb rm -f <vm-name>
 
 ## User network policies
 
-Egress is deny-by-default with the always-on base allow list; user policy groups and project `network.allow` entries widen it.
+Egress is deny-by-default; user policy groups and project `network.allow` entries open it up.
 Reusable policy groups live in `~/.config/motte/policies/<group>.yaml`, one file per group:
 
 ```yaml
@@ -73,8 +73,7 @@ allow:
 ```
 
 Entries use the [microsandbox CLI rule](https://docs.microsandbox.dev/cli/configuration) `TARGET[:PROTO[:PORTS]]` grammar.
-The effective egress allow list for a project is the always-on base policy plus the entries of every group in `network.allowGroups` plus the project's `network.allow`, deduplicated.
-User config can only widen egress, never narrow the base policy.
+The effective egress allow list for a project is the entries of every group in `network.allowGroups` plus the project's `network.allow`, deduplicated.
 Unknown keys, missing groups, or invalid entries fail the launch with the file path in the error.
 
 ```sh
@@ -137,7 +136,7 @@ motte secrets ls                # list the secrets with keychain presence
 Running `motte secrets add` on an existing secret keeps its settings as prompt defaults and asks whether to replace the keychain value.
 
 A launch fails when a selected secret has no settings file (with a hint to run `motte secrets add`) or no keychain value (with a hint to run `motte secrets set <name>`).
-A secret's `allow` hosts only govern credential substitution into HTTP headers (`authorization` and `x-api-key` by default) and do not automatically widen the network egress allow list; allow egress separately via the base policy, a policy group, or the project's `network.allow`.
+A secret's `allow` hosts only govern credential substitution into HTTP headers (`authorization` and `x-api-key` by default) and do not automatically widen the network egress allow list; allow egress separately via a policy group or the project's `network.allow`.
 
 Linux needs a Secret Service provider (gnome-keyring/KWallet, usually preinstalled on desktop environments); on headless setups or WSL without one, the launch fails when reading the keychain.
 Keychain value sizes are limited (~4 KiB on macOS, ~2560 bytes on Windows Credential Manager), which `motte secrets add` and `set` warn about.
