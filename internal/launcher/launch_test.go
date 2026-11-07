@@ -1,149 +1,14 @@
 package launcher
 
 import (
-	"os"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	m "github.com/superradcompany/microsandbox/sdk/go"
-	"github.com/woefe/motte/internal/config"
 	"github.com/woefe/motte/internal/project"
-	"github.com/woefe/motte/internal/secrets"
 	"github.com/woefe/motte/internal/testutil"
 )
-
-// TestLoadProjectMissingHintsInit checks that booting without a project config
-// fails with a hint to run `motte init`.
-func TestLoadProjectMissingHintsInit(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	_, _, err := loadProject()
-	if err == nil || !strings.Contains(err.Error(), "motte init") {
-		t.Fatalf("loadProject(missing) = %v, want `motte init` hint", err)
-	}
-}
-
-// TestSandboxName checks that the sandbox name is `motte-<dir-hash>`.
-func TestSandboxName(t *testing.T) {
-	hash, err := config.DirHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	name, err := sandboxName()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if name != "motte-"+hash {
-		t.Errorf("sandboxName() = %q, want %q", name, "motte-"+hash)
-	}
-}
-
-// TestEffectiveAllowExtendsAndDedups merges selected policy groups and
-// project allow entries in order, deduplicating.
-func TestEffectiveAllowExtendsAndDedups(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "policies/corp.yaml", "allow:\n  - \"*.github.com\"\n  - \"corp.example.com\"\n")
-	testutil.WriteConfigFile(t, "policies/vpn.yaml", "allow:\n  - \"corp.example.com\"\n  - \"vpn.example.com\"\n")
-
-	proj := project.Config{
-		Image:       "ghcr.io/woefe/motte/golang:latest",
-		AllowGroups: []string{"corp", "vpn"},
-		Allow:       []string{"vpn.example.com", "project.example.com"},
-	}
-	allow, err := EffectiveAllow(proj, "/tmp/project.yaml")
-	if err != nil {
-		t.Fatalf("EffectiveAllow: %v", err)
-	}
-	want := []string{"*.github.com", "corp.example.com", "vpn.example.com", "project.example.com"}
-	if !slices.Equal(allow, want) {
-		t.Errorf("allow = %v, want %v", allow, want)
-	}
-	testutil.AssertAllowUnique(t, allow)
-}
-
-// TestEffectiveAllowMissingGroupFailsWithProjectPath fails when a selected
-// group has no file, naming the project file path in the error.
-func TestEffectiveAllowMissingGroupFailsWithProjectPath(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	projectPath, err := project.CurrentPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	proj := project.Config{
-		Image:       "ghcr.io/woefe/motte/base:latest",
-		AllowGroups: []string{"missing-group"},
-	}
-	_, err = EffectiveAllow(proj, projectPath)
-	if err == nil || !strings.Contains(err.Error(), projectPath) || !strings.Contains(err.Error(), "missing-group") {
-		t.Fatalf("EffectiveAllow(missing group) = %v, want project path %q and group name", err, projectPath)
-	}
-}
-
-// TestPolicyGroupValidationErrors covers invalid YAML or rule entries in a
-// selected policy group file.
-func TestPolicyGroupValidationErrors(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	testutil.WriteConfigFile(t, "policies/bad.yaml", "alow:\n  - \"extra.example.com\"\n")
-	proj := project.Config{
-		Image:       "ghcr.io/woefe/motte/base:latest",
-		AllowGroups: []string{"bad"},
-	}
-	if _, err := EffectiveAllow(proj, "/tmp/project.yaml"); err == nil || !strings.Contains(err.Error(), "alow") {
-		t.Fatalf("error = %v, want unknown-field error naming `alow`", err)
-	}
-
-	testutil.WriteConfigFile(t, "policies/bad.yaml", "allow:\n  - \"webserver\"\n")
-	if _, err := EffectiveAllow(proj, "/tmp/project.yaml"); err == nil || !strings.Contains(err.Error(), "webserver") {
-		t.Fatalf("error = %v, want bad-rule error naming `webserver`", err)
-	}
-}
-
-// TestResolveSecrets checks that selected secrets resolve from settings files
-// and the keychain into host env vars, do not widen egress, and fail with
-// clear hints when settings or keychain values are missing.
-func TestResolveSecrets(t *testing.T) {
-	testutil.IsolatedConfigDir(t)
-	store := testutil.NewFakeStore(secrets.ErrNotFound, map[string]string{"EXAMPLE_API_KEY": "sk_test"})
-	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", "allow:\n  - \"api.example.com\"\n")
-	t.Cleanup(func() { _ = os.Unsetenv("MOTTE_SECRET_EXAMPLE_API_KEY") })
-
-	allow, err := EffectiveAllow(project.Config{Image: "ghcr.io/woefe/motte/base:latest"}, "/tmp/project.yaml")
-	if err != nil {
-		t.Fatalf("EffectiveAllow: %v", err)
-	}
-	resolved, err := resolveSecrets([]string{"EXAMPLE_API_KEY"}, store)
-	if err != nil {
-		t.Fatalf("resolveSecrets: %v", err)
-	}
-	if len(resolved) != 1 || resolved[0].Name != "EXAMPLE_API_KEY" {
-		t.Fatalf("resolveSecrets = %+v", resolved)
-	}
-	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "sk_test" {
-		t.Errorf("MOTTE_SECRET_EXAMPLE_API_KEY = %q", got)
-	}
-	// Secret allow hosts must NOT automatically widen the egress allow list.
-	if slices.Contains(allow, "api.example.com") {
-		t.Errorf("allow unexpectedly contains secret host api.example.com: %v", allow)
-	}
-	unsetSecretEnv(resolved)
-	if got := os.Getenv("MOTTE_SECRET_EXAMPLE_API_KEY"); got != "" {
-		t.Errorf("env still set after unsetting: %q", got)
-	}
-
-	// Missing secret settings file fails with a hint to run `motte secrets add`.
-	if _, err := resolveSecrets([]string{"MISSING_SECRET"}, store); err == nil ||
-		!strings.Contains(err.Error(), "motte secrets add") {
-		t.Errorf("error = %v, want `motte secrets add` hint", err)
-	}
-
-	// Missing keychain value fails with a hint to run `motte secrets set <name>`.
-	emptyStore := testutil.NewFakeStore(secrets.ErrNotFound, nil)
-	if _, err := resolveSecrets([]string{"EXAMPLE_API_KEY"}, emptyStore); err == nil ||
-		!strings.Contains(err.Error(), "motte secrets set EXAMPLE_API_KEY") {
-		t.Errorf("error = %v, want `motte secrets set EXAMPLE_API_KEY` hint", err)
-	}
-}
 
 // TestLogCreationProgress logs each stage once despite repeated events, and
 // closes the returned channel after the event stream drains.
@@ -184,5 +49,112 @@ func TestLogCreationProgressSkipsUnknownKinds(t *testing.T) {
 	}
 	if got := buf.String(); got != "" {
 		t.Errorf("log for unknown events = %q, want empty", got)
+	}
+}
+
+// TestParseStoredSecrets covers the durable config shapes: array or map,
+// HostPattern objects or strings, and the injection alias.
+func TestParseStoredSecrets(t *testing.T) {
+	arrayShape := `{"network":{"secrets":{"secrets":[
+		{"env_var":"EXAMPLE_API_KEY","value":"","source":{"kind":"env","var":"MOTTE_SECRET_EXAMPLE_API_KEY"},
+		 "allowed_hosts":[{"wildcard":"*.opencode.ai"},{"exact":"api.example.com"}],
+		 "substitution":{"headers":true,"header_fields":["authorization"]}},
+		{"env_var":"legacy","value":"plaintext","allowed_hosts":["legacy.example.com"],
+		 "injection":{"header_fields":["origin"]}}]}}}`
+	stored, err := parseStoredSecrets(arrayShape)
+	if err != nil {
+		t.Fatalf("parseStoredSecrets: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored = %+v, want 2", stored)
+	}
+	first := stored[0]
+	if first.EnvVar != "EXAMPLE_API_KEY" || first.Value != "" ||
+		len(first.Allow) != 2 || first.Allow[0] != "*.opencode.ai" || first.Allow[1] != "api.example.com" ||
+		len(first.HeaderFields) != 1 || first.HeaderFields[0] != "authorization" {
+		t.Errorf("first = %+v", first)
+	}
+	if second := stored[1]; second.EnvVar != "legacy" || second.Value != "plaintext" ||
+		len(second.Allow) != 1 || second.Allow[0] != "legacy.example.com" ||
+		len(second.HeaderFields) != 1 || second.HeaderFields[0] != "origin" {
+		t.Errorf("second = %+v", second)
+	}
+
+	mapShape := `{"network":{"secrets":{"secrets":{"open_key":
+		{"env_var":"OPEN_KEY","value":"","allowed_hosts":[{"exact":"ok.example.com"}]}}}}}`
+	stored, err = parseStoredSecrets(mapShape)
+	if err != nil {
+		t.Fatalf("parseStoredSecrets(map): %v", err)
+	}
+	if len(stored) != 1 || stored[0].EnvVar != "OPEN_KEY" || stored[0].Allow[0] != "ok.example.com" {
+		t.Fatalf("map stored = %+v", stored)
+	}
+
+	// No secrets section, no entries.
+	if stored, err := parseStoredSecrets(`{"network":{}}`); err != nil || stored != nil {
+		t.Fatalf("empty config = %v %v", stored, err)
+	}
+}
+
+// TestSecretDrift compares stored against desired: adds, raw migrations, host
+// policy changes, and removals.
+func TestSecretDrift(t *testing.T) {
+	desired := []project.ResolvedSecret{
+		{
+			EnvVar:       "a_key",
+			HostEnv:      "MOTTE_SECRET_a_key",
+			Allow:        []string{"a.example.com"},
+			HeaderFields: []string{"authorization"},
+		},
+		{
+			EnvVar:       "b_key",
+			HostEnv:      "MOTTE_SECRET_b_key",
+			Allow:        []string{"b.example.com"},
+			HeaderFields: []string{"authorization"},
+		},
+	}
+
+	// Nothing stored: everything is an add.
+	upsert, remove, migrated := secretDrift(nil, desired)
+	if len(upsert) != 2 || len(remove) != 0 || len(migrated) != 0 {
+		t.Fatalf("nil stored: upsert/remove/migrated = %+v/%v/%v", upsert, remove, migrated)
+	}
+
+	// Matching env-source stored secrets: no drift.
+	upsert, remove, migrated = secretDrift([]storedSecret{
+		{EnvVar: "a_key", Allow: []string{"a.example.com"}, HeaderFields: []string{"authorization"}},
+		{EnvVar: "b_key", Allow: []string{"b.example.com"}, HeaderFields: []string{"authorization"}},
+	}, desired)
+	if len(upsert) != 0 || len(remove) != 0 || len(migrated) != 0 {
+		t.Fatalf("matching: upsert/remove/migrated = %+v/%v/%v", upsert, remove, migrated)
+	}
+
+	// Raw plaintext stored value: migrates to an env reference; the desired
+	// b_key is not stored, so it is added in the same patch.
+	upsert, remove, migrated = secretDrift([]storedSecret{
+		{
+			EnvVar:       "a_key",
+			Value:        "plaintext",
+			Allow:        []string{"a.example.com"},
+			HeaderFields: []string{"authorization"},
+		},
+	}, desired)
+	if len(upsert) != 2 || upsert[0].EnvVar != "a_key" || upsert[1].EnvVar != "b_key" ||
+		len(migrated) != 1 || migrated[0] != "a_key" || len(remove) != 0 {
+		t.Fatalf("raw: upsert/remove/migrated = %+v/%v/%v", upsert, remove, migrated)
+	}
+
+	// A host mismatch changes the stored rule; b_key is additionally added.
+	upsert, remove, migrated = secretDrift([]storedSecret{
+		{EnvVar: "a_key", Allow: []string{"other.example.com"}, HeaderFields: []string{"authorization"}},
+	}, desired)
+	if len(upsert) != 2 || upsert[0].EnvVar != "a_key" || len(migrated) != 0 {
+		t.Fatalf("host mismatch: upsert/remove/migrated = %+v/%v/%v", upsert, remove, migrated)
+	}
+
+	// Stored secrets not desired are removed.
+	upsert, remove, migrated = secretDrift([]storedSecret{{EnvVar: "stale_key"}}, nil)
+	if len(upsert) != 0 || len(remove) != 1 || remove[0] != "stale_key" || len(migrated) != 0 {
+		t.Fatalf("stale: upsert/remove/migrated = %+v/%v/%v", upsert, remove, migrated)
 	}
 }

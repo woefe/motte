@@ -7,8 +7,6 @@ package policies
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,11 +18,6 @@ import (
 	"github.com/woefe/motte/internal/config"
 	"go.yaml.in/yaml/v3"
 )
-
-// LabelKey is the sandbox label that carries the sandbox config fingerprint
-// (image and effective network policy), so a reused VM can be told that its
-// config changed.
-const LabelKey = "motte.policy"
 
 // ErrGroupNotFound reports a missing policy group file.
 var ErrGroupNotFound = errors.New("policy group not found")
@@ -143,16 +136,4 @@ func Template(group string) (string, error) {
 allow:
   # - "*.corp.example.com"
 `, group), nil
-}
-
-// Fingerprint returns a short digest of the sandbox's image and effective
-// network allow list. It rides along in a sandbox label, so a reused VM can be
-// told that the image or policy it was created with is no longer current.
-func Fingerprint(image string, allow []string) string {
-	digest := sha256.New()
-	_, _ = fmt.Fprintf(digest, "image=%s\n", image)
-	for _, entry := range allow {
-		_, _ = fmt.Fprintf(digest, "%s\n", entry)
-	}
-	return hex.EncodeToString(digest.Sum(nil)[:8])
 }

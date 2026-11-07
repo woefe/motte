@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/woefe/motte/internal/config"
-	"github.com/woefe/motte/internal/launcher"
 	"github.com/woefe/motte/internal/policies"
 	"github.com/woefe/motte/internal/project"
 )
@@ -97,7 +96,7 @@ func runPoliciesLs(out, errOut io.Writer) error {
 			_, _ = fmt.Fprintf(out, "  <unreadable: %v>\n", projErr)
 			return nil
 		}
-		effective, err := launcher.EffectiveAllow(proj, projectPath)
+		effective, err := project.EffectiveAllow(proj, projectPath)
 		printPolicyEntries(out, effective, err)
 	}
 	return nil

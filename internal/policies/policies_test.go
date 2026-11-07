@@ -63,21 +63,6 @@ func TestTemplateAndReadGroup(t *testing.T) {
 	}
 }
 
-// TestFingerprintIncludesImageAndPolicy checks that changing either image or
-// network policy changes the fingerprint.
-func TestFingerprintIncludesImageAndPolicy(t *testing.T) {
-	allow := []string{"dns", "*.github.com"}
-	fp1 := Fingerprint("ghcr.io/woefe/motte/base:latest", allow)
-	fp2 := Fingerprint("ghcr.io/woefe/motte/golang:latest", allow)
-	if fp1 == fp2 {
-		t.Error("Fingerprint did not change when image changed")
-	}
-	fp3 := Fingerprint("ghcr.io/woefe/motte/base:latest", ExtendAllow(allow, []string{"extra.example.com"}))
-	if fp1 == fp3 {
-		t.Error("Fingerprint did not change when allow list changed")
-	}
-}
-
 // TestParseAllowRule covers the CLI rule grammar: the semantic dns target,
 // groups, wildcards, IPs and CIDRs, protocols, ports, and the error hints.
 func TestParseAllowRule(t *testing.T) {
