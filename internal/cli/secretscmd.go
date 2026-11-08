@@ -342,21 +342,6 @@ func runSecretsLs(out, errOut io.Writer, store secrets.Store) error {
 	return nil
 }
 
-// --- prompt helpers ---------------------------------------------------------
-
-// promptLine prints a prompt and reads one line from in.
-func promptLine(in *bufio.Reader, errOut io.Writer, prompt string) (string, error) {
-	_, _ = fmt.Fprint(errOut, prompt)
-	line, err := in.ReadString('\n')
-	if line == "" {
-		if err != nil && !errors.Is(err, io.EOF) {
-			return "", fmt.Errorf("reading input: %w", err)
-		}
-		return "", fmt.Errorf("reading input: unexpected end of input")
-	}
-	return strings.TrimSpace(line), nil
-}
-
 // readSecretValue prompts for a secret value without echoing it in a
 // terminal; on a non-terminal stdin (a pipe) it reads the whole input as one
 // line, never accepting argv values.
@@ -379,30 +364,6 @@ func readSecretValue(prompt string, echo io.Writer, in io.Reader) (string, error
 		return "", fmt.Errorf("the piped value must be a single line")
 	}
 	return value, nil
-}
-
-// confirmPrompt asks a yes-no question; force short-circuits it.
-func confirmPrompt(in *bufio.Reader, errOut io.Writer, prompt string, force bool) (bool, error) {
-	if force {
-		return true, nil
-	}
-	answer, err := promptLine(in, errOut, prompt)
-	if err != nil {
-		return false, err
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return answer == "y" || answer == "yes", nil
-}
-
-// isTerminalReader reports whether r is an interactive terminal file.
-func isTerminalReader(r io.Reader) bool {
-	file, ok := r.(*os.File)
-	return ok && isTerminal(file)
-}
-
-// isTerminal reports whether f is an interactive terminal.
-func isTerminal(f *os.File) bool {
-	return term.IsTerminal(int(f.Fd()))
 }
 
 // splitHosts splits a comma-separated host list.
