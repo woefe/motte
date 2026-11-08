@@ -19,6 +19,3 @@ jobs:
 
       - name: Lint
         run: task lint
-
-      - name: Coverage summary
-        run: task ci-coverage

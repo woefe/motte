@@ -1,10 +1,7 @@
 ---
 version: "3"
 
-# Buffer each command's output and print it as one block when it finishes, so
-# parallel tasks do not interleave their lines. Trade-off: no live feedback
-# while a long command (e.g. go test) is running.
-output: group
+output: prefixed
 
 vars:
   COVERAGE_FILE: coverage.out
@@ -14,7 +11,7 @@ tasks:
   # All checks run in parallel; failfast stops the rest once one fails.
   lint:
     desc: Run all linters and Go checks in parallel
-    deps: [editorconfig, yamllint, hadolint, go, build, test]
+    deps: [editorconfig, yamllint, hadolint, golangci-lint, build, test]
     failfast: true
 
   editorconfig:
@@ -29,7 +26,7 @@ tasks:
     cmds:
       - hadolint docker/*/Dockerfile
 
-  go:
+  golangci-lint:
     cmds:
       - golangci-lint run ./...
 
@@ -40,14 +37,8 @@ tasks:
         sh: go list ./... | grep -v /testutil | paste -sd, -
     cmds:
       - go test -covermode=atomic -coverprofile={{.COVERAGE_FILE}} -coverpkg={{.TEST_PKGS}} ./...
-      - go tool cover -func={{.COVERAGE_FILE}} | tail -n1
       - go tool cover -html={{.COVERAGE_FILE}} -o {{.COVERAGE_HTML}}
-
-  ci-coverage:
-    desc: Run tests and write the coverage total to the GitHub step summary
-    cmds:
-      - task: test
-      - go tool cover -func={{.COVERAGE_FILE}} | tail -n1 >> "$GITHUB_STEP_SUMMARY"
+      - go tool cover -func={{.COVERAGE_FILE}} | tail -n1 | tee -a ${GITHUB_STEP_SUMMARY:+"$GITHUB_STEP_SUMMARY"}
 
   build:
     cmds:
@@ -87,6 +78,7 @@ tasks:
 
   image-variant:
     internal: true
+    prefix: "image-variant:{{.VARIANT}}"
     vars:
       REF: ghcr.io/woefe/motte/{{.VARIANT}}:latest
     cmds:
