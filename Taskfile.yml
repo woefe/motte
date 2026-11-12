@@ -20,7 +20,7 @@ tasks:
 
   yamllint:
     cmds:
-      - yamllint .github/workflows/*.yml Taskfile.yml
+      - yamllint .github/dependabot.yml .github/workflows/*.yml Taskfile.yml
 
   hadolint:
     cmds:
