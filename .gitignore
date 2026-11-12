@@ -1,5 +1,6 @@
 /motte
 cmd/motte/motte
+/dist
 coverage.out
 coverage.html
 TODO.md

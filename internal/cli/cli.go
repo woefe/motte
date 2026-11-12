@@ -24,6 +24,10 @@ import (
 	"github.com/woefe/motte/internal/secrets"
 )
 
+// version is the version `motte --version` reports; release builds inject it
+// via -ldflags="-X github.com/woefe/motte/internal/cli.version=<tag>".
+var version = "dev"
+
 // exitCoder is an error that carries the exit code motte exits with. An
 // empty message means the command already reported what happened.
 type exitCoder struct {
@@ -92,6 +96,7 @@ func newRootCommand(e env) *cobra.Command {
 		Short: "launch isolated OpenCode development environments",
 		Long: "motte runs this directory's project in an isolated microVM and attaches the OpenCode TUI to it.\n" +
 			"Project configs live in ~/.config/motte/projects, policy groups in ~/.config/motte/policies, and secrets in the OS keychain.",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
