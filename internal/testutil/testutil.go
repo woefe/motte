@@ -90,16 +90,6 @@ func AssertAllowUnique(t *testing.T, allow []string) {
 	}
 }
 
-// BuiltinImages returns the image reference of every built-in profile.
-func BuiltinImages() map[string]string {
-	return map[string]string{
-		"base":   "ghcr.io/woefe/motte/base:latest",
-		"golang": "ghcr.io/woefe/motte/golang:latest",
-		"rails":  "ghcr.io/woefe/motte/rails:latest",
-		"web":    "ghcr.io/woefe/motte/web:latest",
-	}
-}
-
 // DNSRule is the expansion every plain dns entry shares.
 var DNSRule = msb.PolicyRule{
 	Action:      msb.PolicyActionAllow,
