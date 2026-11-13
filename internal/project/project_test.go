@@ -21,7 +21,7 @@ func TestPresetsAndDetectPreset(t *testing.T) {
 	if got := Presets(); !slices.Equal(got, wantPresets) {
 		t.Fatalf("Presets() = %v, want %v", got, wantPresets)
 	}
-	for name, wantImage := range testutil.BuiltinImages() {
+	for name, wantImage := range presets {
 		image, ok := PresetImage(name)
 		if !ok || image != wantImage {
 			t.Errorf("PresetImage(%q) = %q, %v; want %q", name, image, ok, wantImage)

@@ -58,7 +58,7 @@ func TestNetworkConfig(t *testing.T) {
 }
 
 func TestSandboxOptions(t *testing.T) {
-	image := testutil.BuiltinImages()["base"]
+	image := "base"
 	allow := []string{"dns", "*.github.com", "*.opencode.ai"}
 	rules, err := project.ParseRules(allow)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestSandboxOptions(t *testing.T) {
 }
 
 func TestSandboxOptionsNoPullKeepsDefaultPolicy(t *testing.T) {
-	opts := sandboxOptions(project.Resolved{Image: testutil.BuiltinImages()["golang"]}, true)
+	opts := sandboxOptions(project.Resolved{Image: "stub"}, true)
 	if got := applyOptions(opts).PullPolicy; got != msb.PullPolicyDefault {
 		t.Errorf("PullPolicy = %q, want the default (pull if missing)", got)
 	}
