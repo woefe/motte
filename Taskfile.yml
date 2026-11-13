@@ -3,10 +3,6 @@ version: "3"
 
 output: prefixed
 
-vars:
-  COVERAGE_FILE: coverage.out
-  COVERAGE_HTML: coverage.html
-
 tasks:
   # All checks run in parallel; failfast stops the rest once one fails.
   lint:
@@ -35,14 +31,39 @@ tasks:
     vars:
       TEST_PKGS:
         sh: go list ./... | grep -v /testutil | paste -sd, -
+      COVERAGE_FILE: coverage.out
+      COVERAGE_HTML: coverage.html
     cmds:
       - go test -covermode=atomic -coverprofile={{.COVERAGE_FILE}} -coverpkg={{.TEST_PKGS}} ./...
       - go tool cover -html={{.COVERAGE_FILE}} -o {{.COVERAGE_HTML}}
       - go tool cover -func={{.COVERAGE_FILE}} | tail -n1 | tee -a ${GITHUB_STEP_SUMMARY:+"$GITHUB_STEP_SUMMARY"}
 
   build:
+    vars:
+      VERSION: '{{.VERSION | default "dev"}}'
+      OUTPUT: '{{.OUTPUT | default "motte"}}'
+    env:
+      CGO_ENABLED: "1"
     cmds:
-      - go build -buildmode=pie -trimpath -ldflags="-s -w" ./cmd/motte
+      - >-
+        go build -buildmode=pie -trimpath
+        -ldflags="-s -w -X github.com/woefe/motte/internal/cli.version={{.VERSION}}"
+        -o {{.OUTPUT}} ./cmd/motte
+
+  dist:
+    desc: Build and package a release tarball into dist (VERSION=<tag> and PLATFORM=<label> override the defaults)
+    vars:
+      VERSION: '{{.VERSION | default "dev"}}'
+      PLATFORM: '{{.PLATFORM | default "native" }}'
+    cmds:
+      - rm -rf dist && mkdir -p dist
+      - task: build
+        vars:
+          VERSION: "{{.VERSION}}"
+          OUTPUT: dist/motte
+      - ./dist/motte --version
+      - cp COPYING README.md dist/
+      - tar -czf dist/motte_{{.VERSION | trimPrefix "v"}}_{{.PLATFORM}}.tar.gz -C dist motte COPYING README.md
 
   # Local builds for trying image changes without pushing: the images are
   # tagged with the same ghcr.io refs the profiles reference, so a subsequent

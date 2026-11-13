@@ -201,6 +201,24 @@ func TestIncompleteCommandsPrintHelp(t *testing.T) {
 	}
 }
 
+// TestVersionFlag checks that --version reports the release-injected version
+// string and exits with 0.
+func TestVersionFlag(t *testing.T) {
+	previous := version
+	version = "v0.0.0-test"
+	t.Cleanup(func() { version = previous })
+	code, stdout, stderr := runCLI(t, "motte", "--version")
+	if code != 0 {
+		t.Errorf("Run([motte --version]) = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "motte version v0.0.0-test") {
+		t.Errorf("stdout = %q, want containing %q", stdout, "motte version v0.0.0-test")
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want an empty stderr", stderr)
+	}
+}
+
 // TestRunExitCodes checks the exit code Run returns and what it prints for a
 // failing and a succeeding command.
 func TestRunExitCodes(t *testing.T) {
