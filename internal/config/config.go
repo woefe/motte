@@ -89,7 +89,7 @@ func EnsureOpencodeConfig() (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("checking %s: %w", path, err)
 	}
-	if err := WriteNewFile(path, defaultOpencodeConfig); err != nil {
+	if err := WriteAtomic(path, []byte(defaultOpencodeConfig)); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -111,22 +111,6 @@ func Hint() string {
 		return filepath.Join("<user config dir>", "motte")
 	}
 	return dir
-}
-
-// WriteNewFile creates or replaces a config file, making the parent directory
-// first. The file mode is 0600 regardless of the umask: the chmod call, unlike
-// the create mode, bypasses it.
-func WriteNewFile(path, contents string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("setting the mode of %s: %w", path, err)
-	}
-	return nil
 }
 
 // WriteAtomic writes data to path atomically with 0600 permissions, creating
@@ -209,7 +193,7 @@ func ConfigureFile(f EditableFile) error {
 		if err != nil {
 			return err
 		}
-		if err := WriteNewFile(f.Path, template); err != nil {
+		if err := WriteAtomic(f.Path, []byte(template)); err != nil {
 			return err
 		}
 	} else if err != nil {

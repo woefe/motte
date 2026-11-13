@@ -89,14 +89,14 @@ func TestEnsureOpencodeConfig(t *testing.T) {
 	}
 }
 
-// TestWriteNewFileCreatesParents covers the skeleton write: missing parent
+// TestWriteAtomicCreatesParents covers the config file write: missing parent
 // directories are created and the contents land verbatim with the config file
 // mode.
-func TestWriteNewFileCreatesParents(t *testing.T) {
+func TestWriteAtomicCreatesParents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "deeper", "work.yaml")
 	const skeleton = "allow: []\n"
-	if err := WriteNewFile(path, skeleton); err != nil {
-		t.Fatalf("WriteNewFile: %v", err)
+	if err := WriteAtomic(path, []byte(skeleton)); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
