@@ -43,8 +43,8 @@ func TestTemplateAndReadGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Template: %v", err)
 	}
-	if !strings.Contains(tmpl, "# motte policy group — work-vpn") || !strings.Contains(tmpl, "allow:") {
-		t.Errorf("Template = %q, want header and allow:", tmpl)
+	if !strings.Contains(tmpl, "# motte policy group — work-vpn") || !strings.Contains(tmpl, "---\nallow:") {
+		t.Errorf("Template = %q, want header, document marker, and allow:", tmpl)
 	}
 	testutil.WriteConfigFile(t, "policies/work-vpn.yaml", tmpl)
 	entries, err := ReadGroup("work-vpn")

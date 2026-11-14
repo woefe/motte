@@ -27,6 +27,7 @@ motte oc   # start the sandbox and attach the OpenCode TUI (`oc` is an alias of 
 ```yaml
 # motte project
 # Project path: /home/you/src/motte
+---
 image: ghcr.io/woefe/motte/golang:latest
 network:
   allow:
@@ -68,6 +69,7 @@ Reusable policy groups live in `~/.config/motte/policies/<group>.yaml`, one file
 
 ```yaml
 # motte policy group — work-vpn
+---
 allow:
   - "*.corp.example.com"
 ```
@@ -115,6 +117,7 @@ Each secret's settings live in `~/.config/motte/secrets/<NAME>.yaml`:
 ```yaml
 # motte secret — EXAMPLE_API_KEY
 # Value lives in the OS keychain; set it with `motte secrets set EXAMPLE_API_KEY`.
+---
 allow:
   - "api.example.com"
 header_fields:

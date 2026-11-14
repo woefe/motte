@@ -99,8 +99,8 @@ func TestReadWriteCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "# motte project\n# Project path: "+dir) {
-		t.Errorf("file content = %q, want project path header", string(content))
+	if !strings.Contains(string(content), "# motte project\n# Project path: "+dir+"\n---\n") {
+		t.Errorf("file content = %q, want project path header and document marker", string(content))
 	}
 }
 

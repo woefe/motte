@@ -81,8 +81,9 @@ func TestReadWriteAndRemoveMeta(t *testing.T) {
 		t.Fatalf("reading the secret file: %v", err)
 	}
 	if !strings.Contains(string(content), "# motte secret — EXAMPLE_API_KEY") ||
+		!strings.Contains(string(content), "---\nallow:") ||
 		!strings.Contains(string(content), "*.opencode.ai") {
-		t.Errorf("secret file = %q, want the header comment and hosts", string(content))
+		t.Errorf("secret file = %q, want the header comment, document marker, and hosts", string(content))
 	}
 
 	// Header fields default when omitted.
@@ -133,8 +134,9 @@ func TestTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(tmpl, "# motte secret — EXAMPLE_API_KEY") ||
-		!strings.Contains(tmpl, "motte secrets set EXAMPLE_API_KEY") {
-		t.Errorf("Template = %q, want the header comments", tmpl)
+		!strings.Contains(tmpl, "motte secrets set EXAMPLE_API_KEY") ||
+		!strings.Contains(tmpl, "---\nallow:") {
+		t.Errorf("Template = %q, want the header comments and document marker", tmpl)
 	}
 	testutil.WriteConfigFile(t, "secrets/EXAMPLE_API_KEY.yaml", tmpl)
 	spec, err := Read("EXAMPLE_API_KEY")
