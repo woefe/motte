@@ -220,6 +220,7 @@ func Template(name string) (string, error) {
 	}
 	return fmt.Sprintf(`# motte secret — %s
 # Value lives in the OS keychain; set it with `+"`motte secrets set %s`"+`.
+---
 allow:
   - "api.example.com"
 header_fields:
@@ -245,6 +246,7 @@ func WriteMeta(name string, spec Spec) error {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "# motte secret — %s\n", name)
 	fmt.Fprintf(&buf, "# Value lives in the OS keychain; set it with `motte secrets set %s`.\n", name)
+	buf.WriteString("---\n")
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(doc); err != nil {

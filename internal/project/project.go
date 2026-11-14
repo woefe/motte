@@ -263,6 +263,7 @@ func WriteFile(path, projectDir string, cfg Config) error {
 	if projectDir != "" {
 		fmt.Fprintf(&buf, "# Project path: %s\n", projectDir)
 	}
+	buf.WriteString("---\n")
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(doc); err != nil {

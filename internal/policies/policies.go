@@ -133,6 +133,7 @@ func Template(group string) (string, error) {
 # Every entry uses the microsandbox CLI rule grammar, TARGET[:PROTO[:PORTS]]:
 #   - "*.example.com"
 #   - "host:tcp:9931"
+---
 allow:
   # - "*.corp.example.com"
 `, group), nil
