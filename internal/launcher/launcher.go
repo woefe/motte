@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	msb "github.com/superradcompany/microsandbox/sdk/go"
 	"github.com/woefe/motte/internal/project"
@@ -44,6 +45,11 @@ func Boot(noPull, replace bool) (int, error) {
 	sandbox, err := openSandbox(ctx, name, opts, replace, state)
 	resolved.ClearSecretEnv()
 	if err != nil {
+		return 1, err
+	}
+	if err := prepareGuest(ctx, sandbox, name); err != nil {
+		_ = sandbox.Stop(ctx)
+		_ = sandbox.Close()
 		return 1, err
 	}
 	slog.Info("using sandbox", "name", name)
@@ -127,6 +133,33 @@ func openSandbox(
 		return handle.ConnectOrStart(ctx)
 	}
 	return nil, createErr
+}
+
+// guestRunner is the exec subset of Sandbox used by prepareGuest.
+type guestRunner interface {
+	Exec(ctx context.Context, cmd string, args []string, opts ...msb.ExecOption) (*msb.ExecOutput, error)
+}
+
+// prepareGuest configures shared root mount propagation, an ephemeral /tmp
+// mount, and device permissions (/dev/fuse and /dev/net/tun) so rootless
+// containers work as the unprivileged sandbox user.
+func prepareGuest(ctx context.Context, runner guestRunner, name string) error {
+	const script = "mount --make-rshared / && " +
+		"(mountpoint -q /tmp || mount -t tmpfs -o mode=1777 tmpfs /tmp) && " +
+		"chmod 0666 /dev/fuse /dev/net/tun"
+	out, err := runner.Exec(
+		ctx,
+		"/bin/sh",
+		[]string{"-c", script},
+		msb.WithExecUser("root"),
+	)
+	if err != nil {
+		return fmt.Errorf("preparing sandbox %s: %w", name, err)
+	}
+	if !out.Success() {
+		return fmt.Errorf("preparing sandbox %s (exit %d): %s", name, out.ExitCode(), strings.TrimSpace(out.Stderr()))
+	}
+	return nil
 }
 
 // secretModder is the modify subset shared by Sandbox and SandboxHandle.
