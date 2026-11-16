@@ -23,11 +23,26 @@ var ErrInvalidAfterEdit = errors.New("the config file is invalid after editing")
 
 // ConfigDir returns the root of motte's per-user config tree.
 func ConfigDir() (string, error) {
+	dir, err := userConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "motte"), nil
+}
+
+// userConfigDir returns $XDG_CONFIG_HOME when set to an absolute path,
+// falling back to the OS convention via os.UserConfigDir: ~/.config on
+// Linux and ~/Library/Application Support on macOS, where the variable is
+// not honored otherwise.
+func userConfigDir() (string, error) {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
+		return dir, nil
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("locating the user config dir: %w", err)
 	}
-	return filepath.Join(dir, "motte"), nil
+	return dir, nil
 }
 
 // ProjectsDir returns the root of the per-directory project config tree.
