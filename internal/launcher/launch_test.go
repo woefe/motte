@@ -1,6 +1,8 @@
 package launcher
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,48 @@ import (
 	"github.com/woefe/motte/internal/project"
 	"github.com/woefe/motte/internal/testutil"
 )
+
+type fakeGuestRunner struct {
+	cmd  string
+	args []string
+	opts msb.ExecConfig
+	out  *msb.ExecOutput
+	err  error
+}
+
+func (f *fakeGuestRunner) Exec(
+	_ context.Context, cmd string, args []string, opts ...msb.ExecOption,
+) (*msb.ExecOutput, error) {
+	f.cmd = cmd
+	f.args = args
+	for _, opt := range opts {
+		opt(&f.opts)
+	}
+	return f.out, f.err
+}
+
+func TestPrepareGuest(t *testing.T) {
+	runner := &fakeGuestRunner{out: &msb.ExecOutput{}}
+	if err := prepareGuest(context.Background(), runner, "motte-test"); err != nil {
+		t.Fatalf("prepareGuest: %v", err)
+	}
+	if runner.cmd != "/bin/sh" || len(runner.args) != 2 || runner.args[0] != "-c" {
+		t.Errorf("cmd/args = %q %v", runner.cmd, runner.args)
+	}
+	if !strings.Contains(runner.args[1], "mount --make-rshared /") ||
+		!strings.Contains(runner.args[1], "chmod 0666 /dev/fuse /dev/net/tun") {
+		t.Errorf("script = %q", runner.args[1])
+	}
+	if runner.opts.User != "root" {
+		t.Errorf("Exec User = %q, want root", runner.opts.User)
+	}
+
+	runner.err = errors.New("boom")
+	err := prepareGuest(context.Background(), runner, "motte-test")
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("prepareGuest error = %v, want boom", err)
+	}
+}
 
 // TestLogCreationProgress logs each stage once despite repeated events, and
 // closes the returned channel after the event stream drains.

@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/bin/newuidmap
+Target = usr/bin/newgidmap
+
+[Action]
+Description = Restore setuid bit on newuidmap and newgidmap for microsandbox rootfs...
+When = PostTransaction
+Exec = /usr/bin/chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
